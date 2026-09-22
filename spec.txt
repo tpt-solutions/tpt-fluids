@@ -1,0 +1,176 @@
+tpt-fluids Design Specification (spec.txt)
+1. Overview
+Name: tpt-fluids
+Description: A pure-Rust, AI-native applied fluid mechanics library. It consolidates three specialized fluid domains — 1D hydraulic networks, marine hydrodynamics, and tribology — into a single feature-gated workspace, without C/C++ FFI or external solver dependencies.
+License: MIT (all dependencies must be MIT or compatible; no Apache-2.0-only crates).
+Core Philosophy: Unit-safe, no_std + alloc compatible at the core, differentiable for gradient-based design optimization, and mathematically rigorous via native Rust verification tooling and from-scratch implementations.
+2. Design Principles
+Zero External Solver Dependencies: No EPANET FFI, no WAMIT, no external tribology solvers. All network solvers, resistance integrals, and Reynolds equation discretizations are implemented from scratch in pure Rust, leveraging tpt-math for linear algebra and ODE solving.
+Strict Licensing: No Apache-2.0-only dependencies. The workspace strictly uses MIT, MIT/Apache-2.0 dual, or custom in-house crates.
+Type-State & Dimensional Safety: Compile-time prevention of unit mismatches. Phantom types distinguish between pressure head (
+m
+m), volumetric flow (
+m
+3
+/
+s
+m 
+3
+ /s), mass flow (
+k
+g
+/
+s
+kg/s), and velocity (
+m
+/
+s
+m/s). Froude, Reynolds, and Weber numbers are strictly non-dimensional.
+Native Formal Verification: Safety and physical invariants enforced via:
+Kani Rust Verifier: For bounded model checking of critical numerical loops (e.g., proving Hardy Cross iteration converges, or that water hammer MOC characteristics stay within CFL bounds).
+Property-Based Testing (proptest): For statistical verification of physical laws (e.g., "mass is conserved at every node in a pipe network", "Froude scaling preserves wave-making resistance ratios", "Reynolds equation satisfies load equilibrium").
+3. Workspace Layout
+
+tpt-fluids/
+├── Cargo.toml                 # Workspace manifest (strict dependency linting)
+├── crates/
+│   ├── tpt-fluids-core/       # Foundation: Fluid properties, EOS, viscosity models, unit-safe types
+│   ├── tpt-fluids-hydraulic/  # 1D pipe networks, Darcy-Weisbach, water hammer (MOC), pump curves
+│   ├── tpt-fluids-marine/     # Ship resistance, seakeeping (RAOs), maneuvering (MMG), Froude scaling
+│   ├── tpt-fluids-tribo/      # Reynolds equation, EHL, fluid film bearings, Archard wear
+│   ├── tpt-fluids-verify/     # Verification harnesses: Kani proofs, proptest strategies
+│   └── tpt-fluids/            # Feature-gated umbrella crate re-exporting all above
+├── spec.txt                   # This document
+└── todo.md                    # Phased build tracking
+
+4. Crate Specifications
+tpt-fluids-core
+Purpose: The foundational layer. Defines fluid properties, equations of state, and shared physical quantities.
+Dependencies: tpt-math (internal, MIT), tpt-materials (for density/viscosity lookups).
+Key Features:
+Unit-safe wrappers for pressure (
+P
+a
+Pa), head (
+m
+m), flow rate (
+m
+3
+/
+s
+m 
+3
+ /s), dynamic/kinematic viscosity (
+P
+a
+⋅
+s
+Pa⋅s, 
+m
+2
+/
+s
+m 
+2
+ /s), and density (
+k
+g
+/
+m
+3
+kg/m 
+3
+ ).
+Non-dimensional number types: Reynolds, Froude, Weber, Mach, Cavitation number (
+σ
+σ).
+Equations of state: incompressible, ideal gas, Tait (water), and tabulated interpolation.
+Viscosity models: Newtonian, power-law, Bingham plastic, Sutherland's law (gases).
+Surface tension and contact angle models.
+no_std + alloc compatible.
+tpt-fluids-hydraulic
+Purpose: 1D pipe network analysis for civil, mechanical, and process engineering.
+Key Features:
+Steady-state networks: Darcy-Weisbach and Hazen-Williams friction models, Colebrook-White iterative solver, minor loss coefficients.
+Network solvers: Hardy Cross method (loop-based) and Global Gradient Algorithm (node-based Newton-Raphson).
+Transient analysis: Water hammer via Method of Characteristics (MOC), Joukowsky equation, column separation modeling.
+Component models: Pump/turbine characteristic curves (four-quadrant), valve Cv models, cavitation inception, surge tank dynamics.
+Topology: Directed graph representation with node/edge/loop extraction (leveraging tpt-graph if available).
+Differentiable head-loss functions for network optimization (e.g., pipe sizing).
+tpt-fluids-marine
+Purpose: Naval architecture and marine hydrodynamics for ships and underwater vehicles.
+Key Features:
+Resistance prediction:
+Frictional: ITTC-1957 model-ship correlation line, Granville method.
+Residuary: Michell's thin-ship integral, Holtrop-Mennen empirical method.
+Air drag, appendage drag, and correlation allowance.
+Froude scaling: Model-to-ship extrapolation with form factor and roughness allowance.
+Seakeeping: Linear wave theory, Response Amplitude Operators (RAOs) for 6-DOF ship motions, significant wave height statistics.
+Maneuvering: MMG (Mathematical Modeling Group) model for 3-DOF horizontal plane motions (surge, sway, yaw), hydrodynamic derivatives.
+Propulsion: Wake fraction, thrust deduction, propeller-hull interaction, open-water diagrams.
+Froude-Krylov excitation: For underwater vehicles and floating structures.
+tpt-fluids-tribo
+Purpose: Lubrication theory, contact mechanics, and wear modeling.
+Key Features:
+Hydrodynamic lubrication: Reynolds equation solver (1D/2D finite difference) for journal bearings, slider bearings, and thrust bearings.
+Elastohydrodynamic Lubrication (EHL): Coupled Reynolds + elastic deformation for gears and rolling-element bearings, Dowson-Hampton film thickness formulas.
+Regime modeling: Stribeck curve navigation (boundary, mixed, hydrodynamic regimes).
+Wear modeling: Archard's equation, adhesive/abrasive wear coefficients, running-in simulation.
+Friction models: Coulomb, Stribeck, LuGre dynamic friction for multibody joint integration.
+Differentiable load-capacity integrals for bearing geometry optimization.
+tpt-fluids-verify
+Purpose: Mathematical verification of fluid algorithms and conservation laws.
+Key Features:
+proptest strategies for generating valid pipe network topologies, ship hull forms, and bearing geometries.
+Kani harnesses to prove:
+Hardy Cross loop corrections converge monotonically.
+MOC water hammer characteristics respect CFL stability.
+Reynolds equation satisfies global load equilibrium.
+Invariant checks:
+Mass conservation at every network node (
+∑
+Q
+i
+n
+=
+∑
+Q
+o
+u
+t
+∑Q 
+in
+​
+ =∑Q 
+out
+​
+ ).
+Froude scaling preserves dimensionless resistance coefficients.
+Energy conservation in lossless pipe segments.
+5. Integration & Synergies
+tpt-physics (CFD): tpt-fluids provides fast, specialized 1D and semi-empirical solvers. tpt-physics is reserved for full 3D Navier-Stokes where specialization fails (e.g., complex free-surface flows, turbulent separation).
+tpt-aero: Sibling specialization. tpt-aero owns air (VLM, BEMT); tpt-fluids owns water, pipes, and thin films. Both share the tpt-fluids-core unit-safe types for non-dimensional numbers.
+tpt-fem: tpt-fluids-tribo's EHL module couples Reynolds equation with tpt-fem-elasticity for elastic deformation of bearing surfaces.
+tpt-multibody-dynamics: tpt-fluids-marine provides hydrodynamic forces (resistance, Froude-Krylov, maneuvering) as external loads on ship 6-DOF models. tpt-fluids-tribo provides friction models for joint damping.
+tpt-materials: Supplies temperature-dependent viscosity, density, and surface roughness data.
+tpt-systems-optimisation: Powers gradient-based optimization of pipe network sizing, hull form optimization (via differentiable Michell integral), and bearing geometry design.
+tpt-construction / tpt-engineering: Direct consumers of tpt-fluids-hydraulic for HVAC, plumbing, and municipal water network design.
+AI-Native Agents: Differentiable solvers allow tpt-eve / tpt-anima agents to perform inverse design (e.g., "find the hull form that minimizes resistance at 15 knots").
+6. Phased Rollout (todo.md Alignment)
+Phase 0: Foundation & Hydraulics (Weeks 1-3)
+Scaffold workspace with strict dependency linting.
+Implement tpt-fluids-core (unit-safe types, EOS, viscosity models).
+Build tpt-fluids-hydraulic (Darcy-Weisbach, Colebrook-White, Hardy Cross network solver).
+Verify node mass conservation via proptest.
+Phase 1: Transients & Marine (Weeks 4-6)
+Implement water hammer MOC in tpt-fluids-hydraulic.
+Build tpt-fluids-marine (ITTC-57 friction, Michell integral, Froude scaling).
+Integration test: Model-ship resistance extrapolation matches Holtrop-Mennen benchmarks.
+Phase 2: Tribology & Seakeeping (Weeks 7-9)
+Build tpt-fluids-tribo (Reynolds equation solver, Stribeck curve).
+Implement seakeeping RAOs and MMG maneuvering model in tpt-fluids-marine.
+Write Kani proofs for MOC CFL stability and Reynolds load equilibrium.
+Phase 3: Advanced Coupling (Weeks 10-12)
+EHL coupling with tpt-fem-elasticity.
+Pump/turbine four-quadrant curves and cavitation modeling.
+End-to-end test: Optimize pipe network diameters using tpt-systems-optimisation.
