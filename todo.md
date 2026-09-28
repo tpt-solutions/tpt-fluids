@@ -316,19 +316,25 @@ they are not silently passing either. The proptest invariants run in the
 ordinary suite and have already found a real bug, described in the commit
 message.
 
-## Phase 6 — tpt-fluids (umbrella crate)
+## Phase 6 - `tpt-fluids` umbrella crate
 
-*Feature-gated umbrella crate re-exporting core/hydraulic/marine/tribo/verify.*
-
-- [ ] Scaffold `crates/tpt-fluids/`
-- [ ] Wire optional deps + feature flags: `core` (always on),
-      `hydraulic`, `marine`, `tribo`, `verify`
-- [ ] Re-export each constituent's public API behind its feature
-- [ ] Rustdoc documenting the feature matrix
-- [ ] `cargo fmt` / `clippy` / `deny` clean across feature combinations
-      (`--no-default-features`, `--all-features`, and each single-feature
-      combination)
-- [ ] Add to root `Cargo.toml` members + workspace deps
+- [x] Scaffold `crates/tpt-fluids/`
+- [x] Re-export every sub-crate behind its own feature
+- [x] `prelude` module: the quantity types, dimensionless numbers, constants,
+      and the module path for each application domain, in one import
+- [x] `std` feature propagating to the sub-crates with `?/` so it only
+      reaches a crate whose optional dependency is actually enabled
+- [x] Integration tests: 8, covering cross-crate consistency that unit tests
+      inside a crate cannot see (friction resistance against its own
+      definition, the Froude-scaling chain composed two ways, the two ITTC
+      friction conventions staying 25x apart through the re-export, the Hertz
+      chain including its inverse, and quantities flowing unchanged between
+      marine and tribology)
+- [x] Full feature matrix builds: core alone in `no_std`, each domain alone,
+      all three together, and the whole thing with `verify`
+- [x] Doctest in the crate documentation exercising all three domains
+- [x] `cargo fmt` / `clippy` clean
+- [x] `cargo deny check` clean
 
 ## Phase 7 — Integration & Workspace Closeout
 

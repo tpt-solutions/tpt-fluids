@@ -68,7 +68,7 @@ impl fmt::Display for HydraulicError {
     }
 }
 
-impl std::error::Error for HydraulicError {}
+impl core::error::Error for HydraulicError {}
 
 impl From<SolveFailure> for HydraulicError {
     fn from(e: SolveFailure) -> Self {

@@ -32,7 +32,7 @@ impl fmt::Display for TribologyError {
     }
 }
 
-impl std::error::Error for TribologyError {}
+impl core::error::Error for TribologyError {}
 
 /// The result type used throughout the crate.
 pub type Result<T> = core::result::Result<T, TribologyError>;

@@ -30,7 +30,7 @@ impl fmt::Display for MarineError {
     }
 }
 
-impl std::error::Error for MarineError {}
+impl core::error::Error for MarineError {}
 
 /// The result type used throughout the crate.
 pub type Result<T> = core::result::Result<T, MarineError>;
