@@ -23,6 +23,62 @@ use tpt_fluids_core::quantity::{Density, Length, Power, Velocity, VolumetricFlow
 
 use crate::error::{MarineError, Result};
 
+/// The Reynolds number of a hull, `Re = V L / nu`.
+///
+/// `viscosity` is the kinematic viscosity in square metres per second;
+/// seawater is about `1.05e-6`.
+pub fn reynolds_number(speed: Velocity, length: Length, kinematic_viscosity: f64) -> f64 {
+    if kinematic_viscosity <= 0.0 {
+        return f64::INFINITY;
+    }
+    speed.value() * length.value() / kinematic_viscosity
+}
+
+/// The ITTC-1957 (formulated 1957, adopted 1978) skin-friction coefficient.
+///
+/// ```text
+/// C_f = 0.075 / (log10(Re) - 2)^2
+/// ```
+///
+/// This is the friction correlation to use for a resistance calculation. It
+/// is defined unambiguously: `C_f` is a skin-friction coefficient on the
+/// wetted surface, so `R_f = 0.5 rho V^2 S C_f`. For a merchant hull it comes
+/// out around 0.0015 to 0.003, which is the right size.
+///
+/// A warning about the alternative: the ITTC-1957 *hull-form* line below
+/// returns a number about 25 times larger. That number is a conventional
+/// quoted figure, not a coefficient that can be multiplied into
+/// `R = 0.5 rho V^2 S C_f`. Conflating the two is a 25x error, and it is an
+/// easy one to make because both are called "the ITTC 1957 friction
+/// coefficient".
+pub fn ittc_57_friction(reynolds: f64) -> f64 {
+    if reynolds <= 1.0 {
+        return 0.0;
+    }
+    let denominator = math::log10(reynolds) - 2.0;
+    let squared = denominator * denominator;
+    if squared <= 0.0 {
+        return 0.0;
+    }
+    0.075 / squared
+}
+
+/// The ITTC-1957 hull-form line, which reports a conventional figure rather
+/// than a usable skin-friction coefficient.
+///
+/// ```text
+/// C_f = 0.00313 L^(1/3) + 0.0035 B^(1/3) + 0.0024 (B/T)^(1/2)
+///       + 0.00021 V / L^(1/2) + 0.0024 Fr
+/// Fr  = V / sqrt(g L)
+/// ```
+///
+/// The value this returns is quoted in the literature as `C_f x 10^3`, and
+/// [`friction_coefficient_x1000`] presents it that way. It is roughly 25
+/// times the magnitude of a true skin-friction coefficient, so it must not be
+/// multiplied straight into `0.5 rho V^2 S C_f`; use [`ittc_57_friction`] for
+/// that. This function is kept because the hull-form line is the right thing
+/// to correlate when comparing hull forms that share a length, and because
+/// the published figures are stated in its terms.
 /// The ITTC-1957 friction coefficient for a ship of the given hull geometry
 /// and speed.
 ///
@@ -65,22 +121,24 @@ pub fn friction_coefficient_x1000(
 
 /// The friction resistance of a hull, in newtons.
 ///
-/// `R_f = 0.5 rho V^2 S C_f`, with `S` the wetted surface area. The wetted
-/// area is estimated as `S = L (B + T)`, the usual one-parameter estimate in
-/// the absence of a detailed hull model.
+/// `R_f = 0.5 rho V^2 S C_f` with `C_f` from the ITTC-1957 Reynolds-number
+/// correlation and `S` the wetted surface, estimated as `S = L(B + T)`.
 pub fn friction_resistance(
     length: Length,
     beam: Length,
     draught: Length,
     speed: Velocity,
     density: Density,
+    kinematic_viscosity: f64,
 ) -> f64 {
     let s = length.value() * (beam.value() + draught.value());
-    0.5 * density.value()
-        * speed.value()
-        * speed.value()
-        * s
-        * ittc_1957_friction(length, beam, draught, speed)
+    let re = reynolds_number(speed, length, kinematic_viscosity);
+    0.5 * density.value() * speed.value() * speed.value() * s * ittc_57_friction(re)
+}
+
+/// The wetted surface estimate `S = L(B + T)`, in square metres.
+pub fn wetted_area(length: Length, beam: Length, draught: Length) -> f64 {
+    length.value() * (beam.value() + draught.value())
 }
 
 /// The ITTC-1957 (model-ship) line: the total resistance of a model, in
@@ -348,20 +406,67 @@ mod tests {
 
     #[test]
     fn friction_resistance_is_of_the_right_order() {
-        // 300 m tanker at 12.5 kn: about 240 kN of friction, and about
-        // 1550 kW to overcome it. Both are the right size for the ship.
+        // 120 000 dwt bulker, 225 x 32.3 x 12 m, at 14 kn. Such a ship needs
+        // about 7000 kW; at a total efficiency of 0.6 that means roughly
+        // 583 kN of total resistance, of which friction is the dominant part.
+        let r = friction_resistance(
+            Length::new(225.0),
+            Length::new(32.3),
+            Length::new(12.0),
+            Velocity::new(14.0 * 0.514_444),
+            Density::new(1025.0),
+            1.05e-6,
+        );
+        // S = L(B+T) = 225 * 44.3 = 9968 m^2, Re = 1.54e9, C_f = 0.00145.
+        assert!((r - 397_000.0).abs() / 397_000.0 < 0.05, "Rf = {r}");
+    }
+
+    #[test]
+    fn ittc_57_friction_is_the_right_size_for_a_ship() {
+        // A merchant hull runs at Re of order 1e9, where the ITTC line gives
+        // C_f of order 0.0015. This is the check that distinguishes a real
+        // skin-friction coefficient from the 1957 hull-form figure, which is
+        // about 25 times larger.
+        let re = 1.54e9;
+        let cf = ittc_57_friction(re);
+        assert!((cf - 0.00145).abs() < 5e-5, "Cf = {cf}");
+    }
+
+    #[test]
+    fn the_two_friction_conventions_differ_by_about_twenty_five() {
+        // Documented explicitly because conflating them is the error this
+        // module has to avoid.
         let d = tanker();
         let speed = Velocity::new(12.5 * 0.514_444);
-        let rf = friction_resistance(d.length, d.beam, d.draught, speed, Density::new(1025.0));
-        // S = L(B+T) = 17 700 m^2, so Rf = 0.5 * 1025 * 6.4312^2 * 17700 * 0.0381
-        // = 14.28 MN, and the power to overcome it is about 128 MW.
-        assert!((rf - 14.28e6).abs() / 14.28e6 < 0.02, "Rf = {rf}");
-        let p = required_power(rf, speed, 0.7);
-        assert!(
-            (p.value() - 131e6).abs() / 131e6 < 0.03,
-            "P = {}",
-            p.value()
-        );
+        let hull_form = ittc_1957_friction(d.length, d.beam, d.draught, speed);
+        let re = reynolds_number(speed, d.length, 1.05e-6);
+        let skin = ittc_57_friction(re);
+        let ratio = hull_form / skin;
+        assert!((ratio - 25.0).abs() < 5.0, "ratio = {ratio}");
+    }
+
+    #[test]
+    fn reynolds_number_follows_its_definition() {
+        let re = reynolds_number(Velocity::new(5.0), Length::new(100.0), 1.05e-6);
+        assert!((re - 5.0 * 100.0 / 1.05e-6).abs() / re < 1e-12);
+        // A zero viscosity means no viscous losses, hence infinite Reynolds.
+        assert!(reynolds_number(Velocity::new(5.0), Length::new(100.0), 0.0).is_infinite());
+    }
+
+    #[test]
+    fn ittc_57_friction_is_bounded_at_the_edges() {
+        // A laminar Reynolds number is not a turbulent-ship case; returning
+        // zero is better than dividing by an approaching zero.
+        assert_eq!(ittc_57_friction(1.0), 0.0);
+        assert_eq!(ittc_57_friction(0.0), 0.0);
+        // At exactly Re = 100 the denominator vanishes, so guard it.
+        assert_eq!(ittc_57_friction(100.0), 0.0);
+    }
+
+    #[test]
+    fn wetted_area_is_length_times_beam_plus_draught() {
+        let s = wetted_area(Length::new(300.0), Length::new(45.0), Length::new(14.0));
+        assert!((s - 17_700.0).abs() < 1e-9);
     }
 
     #[test]

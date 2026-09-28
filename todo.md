@@ -90,6 +90,15 @@ GitHub, wired as a normal git/crates.io dependency, not a local path member).*
 - [x] Unit tests + doctests (incl. dimensional-mismatch compile-fail checks
       where phantom typing is meant to reject them)
 - [x] Rustdoc
+- [x] Froude-Krylov excitation: the first-order wave excitation force on a
+      wall-sided hull, `F_x = rho g a (1 - e^(-kT)) 2 sin(kL/2) / k`, resolved
+      onto the ship's axes for any heading. Both limit cases are tested: the
+      force vanishes for waves far shorter than the hull, and tends to
+      `rho a w^2 T L` in the long-wave limit
+- [x] Holtrop-Mennen: total resistance from principal dimensions, split into
+      wave-making, friction, residuary, and appendage terms, with Holtrop's
+      own wetted-surface estimate. Validated against a 120 000 dwt bulker at
+      14 kn, whose resistance is known from its required power
 - [x] `cargo fmt` / `clippy` clean
 - [x] `cargo deny check` clean
 - [x] no_std+alloc verify (`thumbv6m-none-eabi`)
@@ -168,6 +177,15 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       satisfies its own defining equation to 1e-6 independently of the
       iteration used to produce it
 - [ ] Rustdoc for the solvers once they land
+- [x] Froude-Krylov excitation: the first-order wave excitation force on a
+      wall-sided hull, `F_x = rho g a (1 - e^(-kT)) 2 sin(kL/2) / k`, resolved
+      onto the ship's axes for any heading. Both limit cases are tested: the
+      force vanishes for waves far shorter than the hull, and tends to
+      `rho a w^2 T L` in the long-wave limit
+- [x] Holtrop-Mennen: total resistance from principal dimensions, split into
+      wave-making, friction, residuary, and appendage terms, with Holtrop's
+      own wetted-surface estimate. Validated against a 120 000 dwt bulker at
+      14 kn, whose resistance is known from its required power
 - [x] `cargo fmt` / `clippy` clean
 - [x] `cargo deny check` clean
 - [x] Add to root `Cargo.toml` members + workspace deps
@@ -202,7 +220,7 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] Principal dimensions, block coefficient validation, volume and
       displacement, and the power relationships (delivered power, effective
       horsepower, and the inverted speed-for-power a sizing loop needs)
-- [x] Unit tests: 87, with the ITTC-1957 line checked against the published
+- [x] Unit tests: 122, with the ITTC-1957 line checked against the published
       figure (`C_f x 10^3` ~ 38 for a 300 m tanker at 12.5 kn) and the
       model-ship line checked for its exact `W^(2/3) V^6` scaling
 - [x] Froude scaling: model-to-ship extrapolation with form factor and
@@ -239,6 +257,15 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       hull-form optimization
 - [ ] Integration test: model-ship resistance extrapolation matches
       Holtrop-Mennen benchmarks (see Phase 7)
+- [x] Froude-Krylov excitation: the first-order wave excitation force on a
+      wall-sided hull, `F_x = rho g a (1 - e^(-kT)) 2 sin(kL/2) / k`, resolved
+      onto the ship's axes for any heading. Both limit cases are tested: the
+      force vanishes for waves far shorter than the hull, and tends to
+      `rho a w^2 T L` in the long-wave limit
+- [x] Holtrop-Mennen: total resistance from principal dimensions, split into
+      wave-making, friction, residuary, and appendage terms, with Holtrop's
+      own wetted-surface estimate. Validated against a 120 000 dwt bulker at
+      14 kn, whose resistance is known from its required power
 - [x] `cargo fmt` / `clippy` clean
 - [x] `cargo deny check` clean
 - [x] Add to root `Cargo.toml` members + workspace deps

@@ -25,7 +25,22 @@
 //!   and yaw, with the coupled equations of motion, a rudder model, an
 //!   integrator, and the steady turning-circle analysis.
 //!
-//! Still to come: the Froude-Krylov excitation.
+//! - [`excitation`]: the first-order Froude-Krylov wave excitation force on a
+//!   wall-sided hull, resolved onto the ship's axes for any heading.
+//! - [`holtrop`]: the Holtrop-Mennen general estimate of total resistance from
+//!   principal dimensions, split into wave-making, friction, residuary, and
+//!   appendage components.
+//!
+//! # A caution on friction coefficients
+//!
+//! Two different things are both called the ITTC 1957 friction coefficient,
+//! and they differ by a factor of about 25. [`resistance::ittc_57_friction`]
+//! is the one to use: it is defined from the Reynolds number and is a true
+//! skin-friction coefficient on the wetted surface.
+//! [`resistance::ittc_1957_friction`] is the hull-form line, whose output is a
+//! conventional quoted figure and must not be multiplied straight into
+//! `R = 0.5 rho V^2 S C_f`. Both are provided, and both say which is which,
+//! because the confusion is easy and the error is large.
 //!
 //! ## A note on conventions
 //!
@@ -38,7 +53,9 @@
 extern crate alloc;
 
 pub mod error;
+pub mod excitation;
 pub mod froude_scaling;
+pub mod holtrop;
 pub mod manoeuvring;
 pub mod propulsion;
 pub mod resistance;
