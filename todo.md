@@ -172,6 +172,16 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
 - [x] `cargo deny check` clean
 - [x] Add to root `Cargo.toml` members + workspace deps
 
+## Phase 2 status
+
+Complete except for the items marked in progress. The crate carries
+`error`, `friction`, `network`, `hardy_cross`, `gga`, `water_hammer`,
+`components`, and `differentiable`. 73 unit tests and 1 doctest pass, with 2
+`#[ignore]`d for the documented Hardy Cross non-convergence on multi-source,
+multi-loop networks. The GGA is the general solver and is validated against an
+independently derived reference; reach for it unless a small single-source
+network is all that is needed.
+
 ## Phase 3 — tpt-fluids-marine
 
 *Naval architecture and marine hydrodynamics for ships and underwater
