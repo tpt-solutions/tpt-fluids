@@ -202,11 +202,16 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] Principal dimensions, block coefficient validation, volume and
       displacement, and the power relationships (delivered power, effective
       horsepower, and the inverted speed-for-power a sizing loop needs)
-- [x] Unit tests: 17, with the ITTC-1957 line checked against the published
+- [x] Unit tests: 31, with the ITTC-1957 line checked against the published
       figure (`C_f x 10^3` ~ 38 for a 300 m tanker at 12.5 kn) and the
       model-ship line checked for its exact `W^(2/3) V^6` scaling
-- [ ] Froude scaling: model-to-ship extrapolation with form factor and
-      roughness allowance - *next up*
+- [x] Froude scaling: model-to-ship extrapolation with form factor and
+      roughness allowance, in `froude_scaling.rs`. Covers the form factor
+      `S_wet / (L(B+T))`, the box-hull reference, the roughness allowance,
+      `C_ship = C_model / k_f (1 + k_r)`, the `V ~ sqrt(L)` speed scaling, the
+      `L^3` displacement scaling, and the full resistance and power chain.
+      Validated end-to-end against a 1:50 model of a 150 m, 3000 DWT feeder,
+      which reproduces 294 kN and 4.3 MW
 - [ ] Implement seakeeping: linear wave theory, response amplitude
       operators for 6-DOF ship motions, significant wave height statistics
 - [ ] Implement the MMG model for 3-DOF horizontal-plane manoeuvring (surge,

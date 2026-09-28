@@ -29,4 +29,5 @@
 extern crate alloc;
 
 pub mod error;
+pub mod froude_scaling;
 pub mod resistance;
