@@ -221,7 +221,7 @@ fn loop_imbalance(lp: &Loop, network: &Network, flows: &[f64]) -> f64 {
 ///   Rooting separately at each reservoir double-counts: a loop between two
 ///   reservoirs is walked from both ends, so its junction's demand is added
 ///   twice and the seed violates continuity before the solver even starts.
-fn seed_flows(network: &Network) -> Result<Vec<f64>> {
+pub(crate) fn seed_flows(network: &Network) -> Result<Vec<f64>> {
     let n = network.node_count();
     let mut flows = vec![0.0; network.link_count()];
     if n == 0 {
@@ -293,7 +293,7 @@ fn seed_flows(network: &Network) -> Result<Vec<f64>> {
 /// Heads are only defined up to a constant on a tree, so a fixed-head node
 /// pins the datum. The walk is breadth-first, so a parent's head is always
 /// known before its children are reached.
-fn compute_heads(network: &Network, flows: &[f64]) -> Result<Vec<f64>> {
+pub(crate) fn compute_heads(network: &Network, flows: &[f64]) -> Result<Vec<f64>> {
     let n = network.node_count();
     let mut heads = vec![f64::NAN; n];
 

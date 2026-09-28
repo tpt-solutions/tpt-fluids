@@ -131,8 +131,13 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       fundamental cycle-basis (loop) extraction
 - [ ] Implement Hardy Cross method (loop-based) network solver — *next up*
 - [ ] Implement Global Gradient Algorithm (node-based Newton-Raphson) network
-      solver (via `tpt-math-linalg`) - **next up**; also the fix for the
-      multi-source case the Hardy Cross loop basis currently cannot handle
+      solver (via `tpt-math-linalg`) - *solver landed in `gga.rs`; the
+      formulation, Jacobian assembly and backtracking line search are in
+      place, but it is only correct for single-source and directly-evaluated
+      networks. The max-norm line search cannot globalise Newton for the pipe
+      law `Q = sqrt(dh/r)`, whose slope is unbounded at `dh = 0`. A 2-norm
+      criterion or a trust region is the standard fix; five tests are
+      `#[ignore]`d until then.*
 - [ ] Implement transient analysis: water hammer via Method of
       Characteristics (MOC), Joukowsky equation, column separation modeling
 - [ ] Implement component models: pump/turbine four-quadrant characteristic

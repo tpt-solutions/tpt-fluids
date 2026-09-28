@@ -18,22 +18,33 @@
 //!   Hazen-Williams, plus standard absolute pipe roughnesses.
 //! - [`hardy_cross`]: loop-correction steady solver with a continuity-
 //!   satisfying seed flow.
+//! - [`gga`]: node-head Newton-Raphson solver (Global Gradient Algorithm), with
+//!   a backtracking line search.
 //!
 //! ## Known limitation
 //!
-//! The loop basis in [`network`] is rooted at the network's sources, which is
-//! what makes two parallel pipes resolve as a real hydraulic loop. It is
-//! currently only correct for networks with a *single* source: with two or
-//! more reservoirs the source-rooted tree can keep only one of two parallel
-//! pipes as a parent link, leaving the chord unclosable. Four tests are
-//! `#[ignore]`d with that reason. This is exactly the weakness that made the
-//! Global Gradient Algorithm displace Hardy Cross, and the GGA is the next
-//! item in this crate's plan.
+//! ### Status of the two solvers
 //!
-//! Still to come: the Global Gradient Algorithm solver, water-hammer
-//! transients, component curves, and differentiable head loss.
+//! Both solvers are implemented, but neither is yet correct across the whole
+//! range of networks, and 9 tests are `#[ignore]`d with per-test reasons:
+//!
+//! - [`hardy_cross`]: the loop basis is rooted at the network's sources, which
+//!   is what makes two parallel pipes resolve as a real hydraulic loop. It is
+//!   currently only correct for *single-source* networks; with two or more
+//!   reservoirs the source-rooted tree can keep only one of two parallel pipes
+//!   as a parent link, leaving the chord unclosable.
+//! - [`gga`]: solves single-source and directly-evaluated networks correctly,
+//!   but its backtracking line search uses a max-norm descent test, which is
+//!   too crude to globalise Newton for the pipe law `Q = sqrt(dh/r)`. That law
+//!   has unbounded slope at `dh = 0`, so multi-source and looped networks
+//!   still fail to converge. A 2-norm criterion or a trust region is the
+//!   standard fix.
+//!
+//! Still to come: water-hammer transients, component curves, and
+//! differentiable head loss.
 
 pub mod error;
 pub mod friction;
+pub mod gga;
 pub mod hardy_cross;
 pub mod network;
