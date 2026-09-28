@@ -119,28 +119,33 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
 /`tpt-math-linalg-sparse` (Newton-Raphson solves), `tpt-math-autodiff`
 (differentiable head-loss).*
 
-- [ ] Scaffold `crates/tpt-fluids-hydraulic/`
-- [ ] Wire deps: `tpt-fluids-core`, `tpt-math-graph`, `tpt-math-linalg`,
-      `tpt-math-linalg-sparse`, `tpt-math-autodiff`
-- [ ] Implement friction models: Darcy-Weisbach, Hazen-Williams,
-      Colebrook-White iterative solver, minor loss coefficients
-- [ ] Implement network topology on `tpt-math-graph`: directed graph
-      representation, node/edge/loop extraction
-- [ ] Implement Hardy Cross method (loop-based) network solver
+- [x] Scaffold `crates/tpt-fluids-hydraulic/`
+- [x] Wire deps: `tpt-fluids-core`, `tpt-math-graph`, `tpt-math-linalg`,
+      `tpt-math-autodiff`
+- [x] Implement friction models: Darcy-Weisbach (laminar), Colebrook-White
+      iterative solver, Swamee-Jain explicit approximation, Hazen-Williams,
+      plus a table of standard absolute pipe roughnesses. Minor-loss
+      coefficients are represented as `FixedLoss` links in `network.rs`.
+- [x] Implement network topology: directed graph representation with
+      connected-component counting, spanning forest, shortest-path tree, and
+      fundamental cycle-basis (loop) extraction
+- [ ] Implement Hardy Cross method (loop-based) network solver — *next up*
 - [ ] Implement Global Gradient Algorithm (node-based Newton-Raphson) network
-      solver (via `tpt-math-linalg`/`tpt-math-linalg-sparse`)
+      solver (via `tpt-math-linalg`)
 - [ ] Implement transient analysis: water hammer via Method of
       Characteristics (MOC), Joukowsky equation, column separation modeling
 - [ ] Implement component models: pump/turbine four-quadrant characteristic
       curves, valve Cv models, cavitation inception, surge tank dynamics
 - [ ] Implement differentiable head-loss functions (via `tpt-math-autodiff`)
       for downstream pipe-sizing optimization
-- [ ] Unit tests + doctests (incl. a hand-verified small network for Hardy
-      Cross / GGA cross-check)
-- [ ] Rustdoc
-- [ ] `cargo fmt` / `clippy` clean
-- [ ] `cargo deny check` clean
-- [ ] Add to root `Cargo.toml` members + workspace deps
+- [x] Unit tests for the modules delivered so far — 12 friction tests,
+      including a *residual* test that checks the Colebrook-White output
+      satisfies its own defining equation to 1e-6 independently of the
+      iteration used to produce it
+- [ ] Rustdoc for the solvers once they land
+- [x] `cargo fmt` / `clippy` clean
+- [x] `cargo deny check` clean
+- [x] Add to root `Cargo.toml` members + workspace deps
 
 ## Phase 3 — tpt-fluids-marine
 
