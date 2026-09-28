@@ -13,12 +13,17 @@
 //! - [`wear`]: Archard's linear wear law and the wear coefficient, with the
 //!   usual honesty about when Archard is and is not applicable.
 //!
-//! Status: `contact` and `lubrication` are implemented and tested. `wear` is
-//! next, followed by the frictional heat and the roughness and mixed-lubrication
-//! models.
+//! - [`wear`]: Archard's wear law and its inversion, the lambda ratio that
+//!   decides whether a film separates two surfaces, and frictional heating
+//!   with the validity limit of the quasi-steady temperature rise.
+//!
+//! Status: `contact`, `lubrication`, and `wear` are implemented and tested.
+//! Still to come: a transient flash-temperature solution and a
+//! mixed-lubrication friction model.
 
 extern crate alloc;
 
 pub mod contact;
 pub mod error;
 pub mod lubrication;
+pub mod wear;
