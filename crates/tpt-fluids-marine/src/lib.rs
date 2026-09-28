@@ -18,8 +18,14 @@
 //!   amplitude operators for each of the six degrees of freedom, and ITTC
 //!   Pierson-Moskowitz sea-state statistics.
 //!
-//! Still to come: the MMG manoeuvring model, propulsion coefficients, and the
-//! Froude-Krylov excitation.
+//! - [`propulsion`]: the open-water definitions `T = K_T rho n^2 D^4`,
+//!   advance ratio, propulsive and quasi-propulsive efficiencies, wake
+//!   fraction, thrust deduction, and the cavitation-limited diameter.
+//! - [`manoeuvring`]: the MMG 3-DOF horizontal-plane model in surge, sway,
+//!   and yaw, with the coupled equations of motion, a rudder model, an
+//!   integrator, and the steady turning-circle analysis.
+//!
+//! Still to come: the Froude-Krylov excitation.
 //!
 //! ## A note on conventions
 //!
@@ -33,6 +39,7 @@ extern crate alloc;
 
 pub mod error;
 pub mod froude_scaling;
+pub mod manoeuvring;
 pub mod propulsion;
 pub mod resistance;
 pub mod seakeeping;

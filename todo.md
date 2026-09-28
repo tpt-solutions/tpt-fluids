@@ -202,7 +202,7 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] Principal dimensions, block coefficient validation, volume and
       displacement, and the power relationships (delivered power, effective
       horsepower, and the inverted speed-for-power a sizing loop needs)
-- [x] Unit tests: 67, with the ITTC-1957 line checked against the published
+- [x] Unit tests: 87, with the ITTC-1957 line checked against the published
       figure (`C_f x 10^3` ~ 38 for a 300 m tanker at 12.5 kn) and the
       model-ship line checked for its exact `W^(2/3) V^6` scaling
 - [x] Froude scaling: model-to-ship extrapolation with form factor and
@@ -220,8 +220,13 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       freedom that captures resonance, the 180-degree phase reversal above it,
       and damping-limited roll peaks. A Green-function hull-integral RAO is
       not attempted; the SDOF form is documented as an approximation.
-- [ ] Implement the MMG model for 3-DOF horizontal-plane manoeuvring (surge,
-      sway, yaw), hydrodynamic derivatives
+- [x] Implement the MMG model for 3-DOF horizontal-plane manoeuvring (surge,
+      sway, yaw), hydrodynamic derivatives. `manoeuvring.rs` carries the
+      coupled MMG equations of motion including the sway-yaw cross terms,
+      mass and added masses with a gyradius rule, linear and quadratic hull
+      damping, a lift-based rudder model with a clamped maximum deflection,
+      a fixed-step integrator, and the steady turning-circle solution with
+      the diameter expressed in ship lengths.
 - [x] Implement propulsion: wake fraction, thrust deduction, propeller-hull
       interaction, open-water coefficients. `propulsion.rs` carries the
       `T = K_T rho n^2 D^4` and `Q = K_Q rho n^2 D^5` definitions, the
