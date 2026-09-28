@@ -282,11 +282,13 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       Petroff's hydrodynamic friction, the journal-bearing Stribeck curve
       with a genuine interior minimum, minimum film thickness, and the
       eccentricity-load solution
-- [x] Unit tests: 38
-- [ ] Archard's linear wear law and the wear coefficient
-- [ ] Frictional heat generation and flash temperature
-- [ ] Roughness and mixed-lubrication (lambda ratio) models
-- [ ] `cargo fmt` / `clippy` clean
+- [x] Archard's linear wear law and the wear coefficient, plus the
+      inversion, wear depth, life-for-depth, the lambda ratio and its
+      separation-regime classification, and frictional heating with an
+      explicit validity check on the quasi-steady temperature rise. A
+      brake pad computes to 20 000 K, and a test asserts exactly that so
+      the limit of the steady form stays concrete rather than aspirational
+
 - [x] `cargo fmt` / `clippy` clean
 - [x] Add to root `Cargo.toml` members + workspace deps
 
