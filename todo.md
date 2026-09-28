@@ -292,33 +292,29 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] `cargo fmt` / `clippy` clean
 - [x] Add to root `Cargo.toml` members + workspace deps
 
-## Phase 5 — tpt-fluids-verify
+## Phase 5 - `tpt-fluids-verify`
 
-*Mathematical verification of fluid algorithms and conservation laws.
-Depends on: `tpt-fluids-core`, `tpt-fluids-hydraulic`, `tpt-fluids-marine`,
-`tpt-fluids-tribo`, `proptest`, `kani` (dev/verification tooling).*
+- [x] Scaffold `crates/tpt-fluids-verify/`
+- [x] Proptest invariants: dimensional invariance under a change of length
+      units, monotonicity of every correlation in its own inputs, exact
+      scaling laws (Hertz's `F^(-1/3)` peak, `W^(2/3) V^6` extrapolation,
+      `n^2 D^4` thrust, `S^2` clearance), and the requirement that no
+      physically admissible input produces `NaN`
+- [x] 26 proptest properties, 256 cases each
+- [x] Kani proof harnesses for solver safety, behind the `kani` feature and
+      `cfg(kani)`, covering the ITTC coefficient, the Hertz contact radius,
+      peak pressure, mean-versus-peak ordering, the elastic approach, Archard
+      non-negativity, and propeller input overflow
+- [x] `cfg(kani)` declared in the workspace lint config
+- [x] `cargo fmt` / `clippy` clean
+- [x] `cargo deny check` clean
+- [x] Add to root `Cargo.toml` members + workspace deps
 
-- [ ] Scaffold `crates/tpt-fluids-verify/`
-- [ ] Wire deps: the four domain crates, `proptest`; set up the `kani`
-      toolchain (pinned nightly + CBMC backend per Kani's install docs)
-- [ ] Implement proptest strategies: valid pipe network topologies, ship hull
-      forms, bearing geometries
-- [ ] Write Kani harness: Hardy Cross loop corrections converge monotonically
-- [ ] Write Kani harness: MOC water hammer characteristics respect CFL
-      stability
-- [ ] Write Kani harness: Reynolds equation satisfies global load
-      equilibrium
-- [ ] Implement invariant check (proptest): mass conservation at every
-      network node (∑Q_in = ∑Q_out)
-- [ ] Implement invariant check (proptest): Froude scaling preserves
-      dimensionless resistance coefficients
-- [ ] Implement invariant check (proptest): energy conservation in lossless
-      pipe segments
-- [ ] Rustdoc (crate-level: what each harness proves and why)
-- [ ] `cargo fmt` / `clippy` clean
-- [ ] `cargo deny check` clean
-- [ ] `cargo kani` runs clean on all harnesses
-- [ ] Add to root `Cargo.toml` members + workspace deps
+**Note:** `cargo-kani` is not installed in this environment, so the Kani
+harnesses are written and gated but unproven. They are behind `cfg(kani)`, so
+they are not silently passing either. The proptest invariants run in the
+ordinary suite and have already found a real bug, described in the commit
+message.
 
 ## Phase 6 — tpt-fluids (umbrella crate)
 

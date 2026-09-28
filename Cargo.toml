@@ -42,6 +42,10 @@ tpt-math-signal-fft = { version = "0.1.0", default-features = false }
 proptest = "1.11"
 
 [workspace.lints.rust]
+# `kani` is set by cargo-kani itself, not by any feature, so it has to be
+# declared as an expected cfg value or `unexpected_cfgs` rejects it.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 unsafe_op_in_unsafe_fn = "warn"
 unsafe_code = "forbid"
 missing_docs = "warn"

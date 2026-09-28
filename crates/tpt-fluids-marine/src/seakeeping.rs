@@ -144,22 +144,38 @@ impl Oscillator {
         self.rao(2.0 * core::f64::consts::PI / period)
     }
 
-    /// The peak response, which occurs at resonance, and the period it occurs
-    /// at.
+    /// The largest amplification this oscillator can produce, and the wave
+    /// period at which it occurs.
+    ///
+    /// This is the exact supremum of the response curve, which takes two
+    /// forms and it matters which one applies:
+    ///
+    /// - For `zeta < 1/sqrt(2)` the oscillator genuinely resonates. The peak
+    ///   sits at `w_r = w_n sqrt(1 - 2 zeta^2)` and reaches
+    ///   `1 / (2 zeta sqrt(1 - zeta^2))`.
+    /// - For `zeta >= 1/sqrt(2)` there is no resonance at all. The response
+    ///   falls away monotonically from the quasi-static value of 1, so the
+    ///   maximum is simply 1, reached as the wave period goes to infinity.
+    ///
+    /// The familiar `1 / (2 zeta)` is the light-damping limit of the first
+    /// branch, and using it unconditionally was wrong: at `zeta = 0.76` it
+    /// reports 0.658 for a curve whose actual maximum is 1.0. A property test
+    /// over the damping range found that, and it is the kind of error that
+    /// looks like a slightly pessimistic number rather than an obvious fault.
     pub fn peak(&self) -> (f64, f64) {
         let wn = self.natural_frequency();
-        // The resonant frequency is shifted slightly below w_n by the damping;
-        // the shift is second order in zeta, so w_n is the leading answer.
-        let damping = 2.0 * self.damping_ratio * wn * wn;
-        let peak_omega = math::sqrt(wn * wn - damping * damping / 2.0);
-        // Same `w_n^2` numerator as `rao`, for the same reason: the peak
-        // magnitude is `w_n^2 / (2 zeta w_n^2) = 1 / (2 zeta)`.
-        let magnitude = 1.0 / (2.0 * self.damping_ratio);
-        let period = if peak_omega > 0.0 {
-            2.0 * core::f64::consts::PI / peak_omega
-        } else {
-            f64::INFINITY
-        };
+        if wn <= 0.0 {
+            return (1.0, f64::INFINITY);
+        }
+        let zeta = self.damping_ratio;
+        let two_zeta_squared = 2.0 * zeta * zeta;
+        if zeta >= core::f64::consts::FRAC_1_SQRT_2 || 1.0 - two_zeta_squared <= 0.0 {
+            // Overdamped or critically damped: no peak, the curve starts at 1.
+            return (1.0, f64::INFINITY);
+        }
+        let peak_omega = wn * math::sqrt(1.0 - two_zeta_squared);
+        let magnitude = 1.0 / (2.0 * zeta * math::sqrt(1.0 - zeta * zeta));
+        let period = 2.0 * core::f64::consts::PI / peak_omega;
         (magnitude, period)
     }
 }
@@ -363,6 +379,50 @@ mod tests {
             (peak - 1.0 / (2.0 * 0.05)).abs() / peak < 0.02,
             "peak = {peak}"
         );
+    }
+
+    #[test]
+    fn an_overdamped_oscillator_has_no_peak() {
+        // Above zeta = 1/sqrt(2) the response never resonates. The maximum is
+        // the quasi-static value of 1, reached at infinite wave period, and
+        // the familiar 1/(2 zeta) would wrongly report 0.66 for a curve that
+        // actually reaches 1.0.
+        let heavy = Oscillator::new(0.5, 0.76).unwrap();
+        let (peak, period) = heavy.peak();
+        assert!((peak - 1.0).abs() < 1e-12, "peak = {peak}");
+        assert!(period.is_infinite(), "period = {period}");
+        // And the curve really does reach 1 at a long wave period.
+        let long = heavy.rao_at_period(1000.0).magnitude;
+        assert!((long - 1.0).abs() < 0.01, "long-wave RAO = {long}");
+    }
+
+    #[test]
+    fn the_exact_peak_exceeds_the_light_damping_approximation() {
+        // 1/(2 zeta) is only the light-damping limit. The exact value
+        // carries a further 1/sqrt(1 - zeta^2).
+        let osc = Oscillator::new(10.0, 0.30).unwrap();
+        let (peak, _) = osc.peak();
+        let approximation = 1.0 / (2.0 * 0.30);
+        assert!(peak > approximation, "{peak} vs {approximation}");
+        let expected = 1.0 / (2.0 * 0.30 * (1.0f64 - 0.09).sqrt());
+        assert!((peak - expected).abs() / expected < 1e-12);
+    }
+
+    #[test]
+    fn the_peak_is_attained_where_it_is_reported() {
+        // The reported peak magnitude must actually be the largest value the
+        // curve reaches, not merely a plausible upper bound.
+        for zeta in [0.05, 0.2, 0.4, 0.6] {
+            let osc = Oscillator::new(8.0, zeta).unwrap();
+            let (peak, period) = osc.peak();
+            if period.is_finite() {
+                let at = osc.rao_at_period(period).magnitude;
+                assert!(
+                    (at - peak).abs() / peak < 1e-3,
+                    "zeta {zeta}: at {at} vs peak {peak}"
+                );
+            }
+        }
     }
 
     #[test]

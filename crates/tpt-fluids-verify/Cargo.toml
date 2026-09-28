@@ -23,6 +23,8 @@ proptest = { workspace = true }
 [features]
 default = ["std"]
 std = []
+# Enables the Kani proof harnesses. Not for a normal build.
+kani = []
 
 [lints]
 workspace = true
