@@ -22,6 +22,8 @@
 //! earned their keep by finding a real bug in the seakeeping peak response.
 
 #[cfg(test)]
+pub mod conservation;
+#[cfg(test)]
 pub mod invariants;
 
 #[cfg(all(test, feature = "kani"))]

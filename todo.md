@@ -370,6 +370,79 @@ message.
       end-to-end pipe-network diameter optimization via
       `tpt-systems-optimisation`
 
+## Spec audit (against `spec.txt`, post-Phase-7)
+
+The seven phases are closed, so this records what `spec.txt` still asks for
+that the workspace does not yet have, audited line by line rather than
+assumed.
+
+### Closed this pass
+
+- [x] **Mass conservation at every network node** (`spec.txt` line 145, and
+      line 31's worked example). Now a proptest over generated topologies, in
+      `tpt-fluids-verify/src/conservation.rs`. The generator builds a random
+      spanning tree rooted at a reservoir plus random chords, so it is
+      connected and looped by construction and never has to reject a graph.
+      Checked on both trees and looped networks, with the tolerance scaled by
+      the largest flow in the network so the test is relative.
+- [x] **Energy conservation in a lossless segment** (line 149). A pipe with no
+      demand can neither dissipate head nor carry flow. Paired with its
+      complement, a frictional segment *must* lose head, so the pair
+      distinguishes a solver that models dissipation from one that conserves
+      everything by accident.
+- [x] **proptest strategies for valid network topologies** (line 124). Done as
+      part of the above.
+- [x] `tpt-fem-contact` was investigated for the EHL coupling and is **not** a
+      path dependency. It is finite-element surface-to-surface contact
+      (penalty and augmented Lagrangian on a mesh); EHL needs an elastic
+      compliance kernel for a rough surface, which is a different thing. The
+      coupling stays open, but the blocker is now described accurately rather
+      than as "the crate is missing".
+
+### Still open, in rough priority order
+
+- [ ] **Reynolds equation solver** (line 115) - the centrepiece of tribology
+      and the largest single gap. Work done this pass, recorded so it is not
+      repeated:
+      - The finite-volume discretisation is settled and *verified to machine
+        precision* against a manufactured solution (nodal error ~5e-15). The
+        form is `h_l^3 P_{i-1} - (h_r^3 + h_l^3) P_i + h_r^3 P_{i+1} = 6 dh`,
+        with film thickness at the faces and pressure at the cell centres.
+        Getting that face/centre distinction wrong produces a smooth,
+        plausible, entirely wrong solution - it cost an hour.
+      - Plain Thomas (tridiagonal direct solve) is **numerically unstable**
+        here. At `eps = 0.6` the peak pressure oscillates 86 -> 538 -> 270 ->
+        2935 as the grid is refined, against an analytic value of 9.1. The
+        matrix is not diagonally dominant. It needs SOR or Gauss-Seidel with
+        over-relaxation.
+      - Beyond `eps ~ 0.7` the full-Sommerfeld condition is unphysical: the
+        film collapses in the diverging region and Reynolds' supplementary
+        cavitation condition is required. Without it the pressure goes
+        negative, which no lubricant can do.
+      - A naive cross-check against the closed-form long-bearing solution is
+        itself hazardous: that solution has a pressure spike at
+        `eps = 1/sqrt(2)`, so a naive quadrature over it is dominated by the
+        spike and the load integral is meaningless. The manufactured-solution
+        check is the trustworthy one.
+- [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116)
+- [ ] **LuGre dynamic friction** (line 119) - needed for multibody joint
+      integration, and self-contained
+- [ ] **Load capacity for slider and thrust bearings**, and the differentiable
+      load-capacity integrals (lines 115, 120)
+- [ ] **Running-in wear simulation** (line 118)
+- [ ] **Turbine four-quadrant curves and cavitation inception** (line 97,
+      Phase 3 line 175). `PumpCurve` and `CavitationState` exist; a turbine is
+      still only a loss coefficient.
+- [ ] **Kani: Hardy Cross monotone convergence** (line 126) and **MOC CFL
+      stability** (line 127). Both target solvers that exist, so these are
+      tractable now that the harness pattern is established.
+- [ ] **Kani: Reynolds global load equilibrium** (line 128) - blocked on the
+      solver above.
+- [ ] **`tpt-systems-optimisation`** (lines 156, 176) - consumer-side, not
+      present as a sibling repo.
+- [ ] **EHL coupling with `tpt-fem-elasticity`** (line 153) - see the
+      `tpt-fem-contact` note above.
+
 ## External dependency gaps
 
 *Two crates named in `spec.txt`'s integration section (§5) and Phase 3
