@@ -181,3 +181,16 @@ pub fn acos(x: f64) -> f64 {
 pub fn abs(x: f64) -> f64 {
     f64::abs(x)
 }
+
+/// The cube root, via `std` when available and `libm` otherwise.
+#[inline]
+pub fn cbrt(x: f64) -> f64 {
+    #[cfg(feature = "std")]
+    {
+        x.cbrt()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        libm::cbrt(x)
+    }
+}

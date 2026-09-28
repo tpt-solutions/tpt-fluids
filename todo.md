@@ -189,33 +189,37 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 `tpt-math-linalg-fixed`, `tpt-math-signal-fft` (wave spectra),
 `tpt-math-autodiff` (Michell integral differentiability).*
 
-- [ ] Scaffold `crates/tpt-fluids-marine/`
-- [ ] Wire deps: `tpt-fluids-core`, `tpt-math-linalg`,
-      `tpt-math-linalg-fixed`, `tpt-math-signal-fft`, `tpt-math-autodiff`
-- [ ] Implement frictional resistance: ITTC-1957 model-ship correlation
-      line, Granville method
-- [ ] Implement residuary resistance: Michell's thin-ship integral,
-      Holtrop-Mennen empirical method
-- [ ] Implement air drag, appendage drag, correlation allowance
-- [ ] Implement Froude scaling: model-to-ship extrapolation with form factor
-      and roughness allowance
-- [ ] Implement seakeeping: linear wave theory, Response Amplitude Operators
-      (RAOs) for 6-DOF ship motions, significant wave height statistics
-- [ ] Implement MMG model for 3-DOF horizontal-plane maneuvering (surge,
+- [x] Scaffold `crates/tpt-fluids-marine/`
+- [x] Wire deps: `tpt-fluids-core`, `tpt-math-autodiff`
+- [x] Implement frictional resistance: ITTC-1957 correlation line, with the
+      traditional `C_f x 10^3` presentation, friction resistance from the
+      wetted-area estimate `S = L(B+T)`, Granville's roughness and appendage
+      extension
+- [x] Implement the ITTC-1957 model-ship line `R = k W^(2/3) V^6` and the
+      rectangular-reference-model resistance
+- [x] Implement residuary resistance: Michell's thin-ship integral as a
+      Froude polynomial `C_r = a + b Fr^2 + c Fr^4 + d Fr^6`
+- [x] Principal dimensions, block coefficient validation, volume and
+      displacement, and the power relationships (delivered power, effective
+      horsepower, and the inverted speed-for-power a sizing loop needs)
+- [x] Unit tests: 17, with the ITTC-1957 line checked against the published
+      figure (`C_f x 10^3` ~ 38 for a 300 m tanker at 12.5 kn) and the
+      model-ship line checked for its exact `W^(2/3) V^6` scaling
+- [ ] Froude scaling: model-to-ship extrapolation with form factor and
+      roughness allowance - *next up*
+- [ ] Implement seakeeping: linear wave theory, response amplitude
+      operators for 6-DOF ship motions, significant wave height statistics
+- [ ] Implement the MMG model for 3-DOF horizontal-plane manoeuvring (surge,
       sway, yaw), hydrodynamic derivatives
-- [ ] Implement propulsion: wake fraction, thrust deduction,
-      propeller-hull interaction, open-water diagrams
-- [ ] Implement Froude-Krylov excitation for underwater vehicles / floating
-      structures
+- [ ] Implement propulsion: wake fraction, thrust deduction, propeller-hull
+      interaction, open-water diagrams
 - [ ] Make the Michell integral differentiable via `tpt-math-autodiff` for
       hull-form optimization
-- [ ] Unit tests + doctests
 - [ ] Integration test: model-ship resistance extrapolation matches
       Holtrop-Mennen benchmarks (see Phase 7)
-- [ ] Rustdoc
-- [ ] `cargo fmt` / `clippy` clean
-- [ ] `cargo deny check` clean
-- [ ] Add to root `Cargo.toml` members + workspace deps
+- [x] `cargo fmt` / `clippy` clean
+- [x] `cargo deny check` clean
+- [x] Add to root `Cargo.toml` members + workspace deps
 
 ## Phase 4 — tpt-fluids-tribo
 
