@@ -202,7 +202,7 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] Principal dimensions, block coefficient validation, volume and
       displacement, and the power relationships (delivered power, effective
       horsepower, and the inverted speed-for-power a sizing loop needs)
-- [x] Unit tests: 31, with the ITTC-1957 line checked against the published
+- [x] Unit tests: 48, with the ITTC-1957 line checked against the published
       figure (`C_f x 10^3` ~ 38 for a 300 m tanker at 12.5 kn) and the
       model-ship line checked for its exact `W^(2/3) V^6` scaling
 - [x] Froude scaling: model-to-ship extrapolation with form factor and
@@ -212,8 +212,14 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       `L^3` displacement scaling, and the full resistance and power chain.
       Validated end-to-end against a 1:50 model of a 150 m, 3000 DWT feeder,
       which reproduces 294 kN and 4.3 MW
-- [ ] Implement seakeeping: linear wave theory, response amplitude
-      operators for 6-DOF ship motions, significant wave height statistics
+- [x] Implement seakeeping: linear wave theory, response amplitude
+      operators for 6-DOF ship motions, significant wave height statistics.
+      `seakeeping.rs` carries the deep-water dispersion relation and
+      wavelength, the ITTC Pierson-Moskowitz significant height and peak
+      period, the six motion modes, and a damped-oscillator RAO per degree of
+      freedom that captures resonance, the 180-degree phase reversal above it,
+      and damping-limited roll peaks. A Green-function hull-integral RAO is
+      not attempted; the SDOF form is documented as an approximation.
 - [ ] Implement the MMG model for 3-DOF horizontal-plane manoeuvring (surge,
       sway, yaw), hydrodynamic derivatives
 - [ ] Implement propulsion: wake fraction, thrust deduction, propeller-hull

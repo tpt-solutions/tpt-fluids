@@ -9,13 +9,16 @@
 //!
 //! ## Status
 //!
-//! [`resistance`] is implemented and tested: ITTC-1957 friction, the 1957
-//! model-ship line, Granville's roughness and appendage extension, and
-//! Michell's thin-ship residuary integral as a Froude polynomial, together
-//! with principal dimensions, displacement, and the power relationships.
+//! - [`resistance`]: ITTC-1957 friction, the 1957 model-ship line, Granville's
+//!   roughness and appendage extension, and Michell's thin-ship residuary
+//!   integral as a Froude polynomial.
+//! - [`froude_scaling`]: model-to-ship extrapolation with the form factor and
+//!   the roughness allowance.
+//! - [`seakeeping`]: deep-water linear wave theory, damped-oscillator response
+//!   amplitude operators for each of the six degrees of freedom, and ITTC
+//!   Pierson-Moskowitz sea-state statistics.
 //!
-//! Still to come: Froude scaling, the seakeeping response-amplitude
-//! operators, the MMG manoeuvring model, propulsion coefficients, and the
+//! Still to come: the MMG manoeuvring model, propulsion coefficients, and the
 //! Froude-Krylov excitation.
 //!
 //! ## A note on conventions
@@ -31,3 +34,4 @@ extern crate alloc;
 pub mod error;
 pub mod froude_scaling;
 pub mod resistance;
+pub mod seakeeping;
