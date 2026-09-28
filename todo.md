@@ -425,8 +425,13 @@ assumed.
         spike and the load integral is meaningless. The manufactured-solution
         check is the trustworthy one.
 - [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116)
-- [ ] **LuGre dynamic friction** (line 119) - needed for multibody joint
-      integration, and self-contained
+- [x] **LuGre dynamic friction** (line 119) - `tpt-fluids-tribo/src/friction.rs`,
+      with Coulomb as the degenerate baseline, the Stribeck steady-state
+      curve, the one-state bristle ODE, the relaxation timescale, and a sweep
+      helper. 20 tests. Validated against hand-computed values: the bristle
+      loads to exactly F_ss/s_0, the total settles to F_ss + s_2 v, and one
+      step after a velocity jump the force is 24.4 against a steady state of
+      20.025, a 22 percent memory excess that a static curve cannot produce.
 - [ ] **Load capacity for slider and thrust bearings**, and the differentiable
       load-capacity integrals (lines 115, 120)
 - [ ] **Running-in wear simulation** (line 118)

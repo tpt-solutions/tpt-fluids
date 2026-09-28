@@ -25,5 +25,6 @@ extern crate alloc;
 
 pub mod contact;
 pub mod error;
+pub mod friction;
 pub mod lubrication;
 pub mod wear;
