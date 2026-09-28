@@ -478,6 +478,53 @@ assumed.
 - [ ] **EHL coupling with `tpt-fem-elasticity`** (line 153) - see the
       `tpt-fem-contact` note above.
 
+## Kani / WSL: environment status
+
+`spec.txt` lines 30 and 126-128 ask for Kani proofs. `cargo-kani` **does not
+support Windows**: the install guide lists only `x86_64-unknown-linux-gnu`,
+`x86_64-apple-darwin` and `aarch64-apple-darwin`. WSL is therefore the only
+route, and its state on this machine (Windows 11 Home) is now:
+
+- **Done:** the WSL 2.7.14 kernel package installed successfully via
+  `wsl --install --no-distribution`, which needs no elevation. `wsl --version`
+  reports the kernel and `wslgpu` present.
+- **Blocked:** both WSL1 and WSL2 need optional Windows features enabled, and
+  that requires elevation. `dism /online /enable-feature` returns
+  `Error: 740 - Elevated permissions are required to run DISM`, and
+  `Get-WindowsOptionalFeature` likewise. The agent shell runs as a
+  non-administrator user and cannot self-elevate, because UAC needs an
+  interactive consent prompt.
+- `wsl --status` confirms the consequence: WSL2 is unavailable because the
+  virtualization component is not enabled, and no distribution is installed.
+- Note that `HypervisorPresent` is `False` and `VirtualizationFirmwareEnabled`
+  is `True`, so the hardware supports it; only the OS feature is missing.
+
+### To finish, in an elevated PowerShell (Run as Administrator), then reboot
+
+```powershell
+wsl --install -d Ubuntu          # enables features, installs the distro
+# reboot required -- VirtualMachinePlatform cannot be enabled in this session
+```
+
+After the reboot, Kani itself installs inside the distribution:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install --locked kani-verifier
+cargo kani setup                  # downloads the CBMC compiler and data
+```
+
+Then the harnesses that are already written in `tpt-fluids-verify` can finally
+run:
+
+```bash
+cargo kani --package tpt-fluids-verify --features kani
+```
+
+Until then nothing claims the harnesses pass, which is why they sit behind
+`cfg(kani)`: they are compiled only when a real `cargo-kani` invokes them, so
+they cannot be mistaken for verification that happened.
+
 ## External dependency gaps
 
 *Two crates named in `spec.txt`'s integration section (§5) and Phase 3
