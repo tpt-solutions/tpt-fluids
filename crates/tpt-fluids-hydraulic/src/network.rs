@@ -415,3 +415,131 @@ impl Loop {
         self.terms.is_empty()
     }
 }
+
+/// A fundamental cycle basis rooted at the network's sources.
+///
+/// # Why an ordinary spanning forest is not enough
+///
+/// A plain spanning forest of the *undirected* graph treats two parallel
+/// pipes between the same pair of nodes as an ordinary path, leaving no cycle.
+/// Hydraulically that is wrong: flow can run either way down a pipe, so two
+/// parallel pipes really are a loop, and their flow split is the single most
+/// common thing a pipe-network solver has to get right.
+///
+/// The correct hydraulic tree is therefore rooted at the **source** nodes
+/// (those with a fixed head), and every link that is not used as some node's
+/// parent generates one loop. The loop count then comes out as
+/// `links - nodes + sources`, which is the standard network-solver figure.
+///
+/// # Traversal direction
+///
+/// A link traversal is always in the link's own direction, upstream to
+/// downstream, so a loop may traverse a pipe against its nominal flow. The
+/// `forward` flag on each term records which way round, and the Hardy Cross
+/// correction's sign depends on it. Each term records the node the traversal
+/// *departs* from, so consecutive terms chain.
+pub fn fundamental_loops(network: &Network) -> Vec<Loop> {
+    let n = network.node_count();
+    if n == 0 || network.link_count() == 0 {
+        return Vec::new();
+    }
+
+    // Undirected adjacency: (neighbour, link, neighbour_is_link_downstream).
+    let mut adj: Vec<Vec<(NodeId, LinkId, bool)>> = vec![Vec::new(); n];
+    for link in network.links() {
+        adj[link.upstream.0].push((link.downstream, link.id, true));
+        adj[link.downstream.0].push((link.upstream, link.id, false));
+    }
+
+    // Root the tree at every source; fall back to node 0 if there are none.
+    let mut roots: Vec<NodeId> = network
+        .nodes()
+        .iter()
+        .filter(|node| node.fixed_head.is_some())
+        .map(|node| node.id)
+        .collect();
+    if roots.is_empty() {
+        roots.push(NodeId(0));
+    }
+
+    let mut tree_parent: Vec<Option<LinkId>> = vec![None; n];
+    let mut seen = vec![false; n];
+    let mut queue = VecDeque::new();
+    for root in &roots {
+        if !seen[root.0] {
+            seen[root.0] = true;
+            queue.push_back(*root);
+        }
+    }
+    while let Some(node) = queue.pop_front() {
+        for &(next, link_id, _) in &adj[node.0] {
+            if !seen[next.0] {
+                seen[next.0] = true;
+                tree_parent[next.0] = Some(link_id);
+                queue.push_back(next);
+            }
+        }
+    }
+
+    let is_tree_link = |id: LinkId| tree_parent.contains(&Some(id));
+
+    let mut loops = Vec::new();
+    for chord in network.links().iter().filter(|l| !is_tree_link(l.id)) {
+        // Undirected BFS through tree links from the chord's downstream node
+        // to its upstream node.
+        let start = chord.downstream;
+        let goal = chord.upstream;
+        let mut prev: Vec<Option<(NodeId, LinkId, bool)>> = vec![None; n];
+        let mut visited = vec![false; n];
+        visited[start.0] = true;
+        let mut q = VecDeque::new();
+        q.push_back(start);
+        let mut found = start == goal;
+
+        while let Some(node) = q.pop_front() {
+            if node == goal {
+                found = true;
+                break;
+            }
+            for &(next, link_id, at_downstream) in &adj[node.0] {
+                // Tree links are freely usable; the chord itself is also
+                // usable, but only as the single edge that closes the loop.
+                let usable = is_tree_link(link_id) || link_id == chord.id;
+                if !visited[next.0] && usable {
+                    visited[next.0] = true;
+                    // `forward` is true when we leave `node` along the link's
+                    // own upstream -> downstream direction, i.e. when `node`
+                    // is the link's upstream node.
+                    prev[next.0] = Some((node, link_id, !at_downstream));
+                    q.push_back(next);
+                }
+            }
+        }
+
+        if found {
+            let mut terms: Vec<LoopTerm> = Vec::new();
+            let mut cursor = goal;
+            while cursor != start {
+                let Some((parent, link_id, forward)) = prev[cursor.0] else {
+                    break;
+                };
+                terms.push(LoopTerm {
+                    link: link_id,
+                    node: parent,
+                    forward,
+                });
+                cursor = parent;
+            }
+            terms.reverse();
+            terms.push(LoopTerm {
+                link: chord.id,
+                node: chord.upstream,
+                forward: true,
+            });
+            if terms.len() > 1 {
+                loops.push(Loop::from_terms(terms));
+            }
+        }
+    }
+    loops
+}
