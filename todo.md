@@ -402,28 +402,58 @@ assumed.
 ### Still open, in rough priority order
 
 - [ ] **Reynolds equation solver** (line 115) - the centrepiece of tribology
-      and the largest single gap. Work done this pass, recorded so it is not
-      repeated:
-      - The finite-volume discretisation is settled and *verified to machine
-        precision* against a manufactured solution (nodal error ~5e-15). The
-        form is `h_l^3 P_{i-1} - (h_r^3 + h_l^3) P_i + h_r^3 P_{i+1} = 6 dh`,
-        with film thickness at the faces and pressure at the cell centres.
-        Getting that face/centre distinction wrong produces a smooth,
-        plausible, entirely wrong solution - it cost an hour.
-      - Plain Thomas (tridiagonal direct solve) is **numerically unstable**
-        here. At `eps = 0.6` the peak pressure oscillates 86 -> 538 -> 270 ->
-        2935 as the grid is refined, against an analytic value of 9.1. The
-        matrix is not diagonally dominant. It needs SOR or Gauss-Seidel with
-        over-relaxation.
-      - Beyond `eps ~ 0.7` the full-Sommerfeld condition is unphysical: the
-        film collapses in the diverging region and Reynolds' supplementary
-        cavitation condition is required. Without it the pressure goes
-        negative, which no lubricant can do.
-      - A naive cross-check against the closed-form long-bearing solution is
-        itself hazardous: that solution has a pressure spike at
-        `eps = 1/sqrt(2)`, so a naive quadrature over it is dominated by the
-        spike and the load integral is meaningless. The manufactured-solution
-        check is the trustworthy one.
+      and the largest single gap. **Not shipped: attempted twice, deliberately
+      stopped.** Everything learned is recorded here so the third attempt does
+      not repeat it.
+
+      **Verified and reusable:**
+      - The finite-volume discretisation is exact to machine precision against
+        a manufactured solution (nodal error ~5e-15). The form is
+        `h_l^3 P_{i-1} - (h_r^3 + h_l^3) P_i + h_r^3 P_{i+1} = 6 (h_r - h_l) dX`,
+        with film thickness at the **faces** and pressure at the **cell
+        centres**. Confusing those two gives a smooth, plausible, entirely
+        wrong solution with a constant 0.45 error and no convergence at all.
+        That cost an hour and is the single easiest way to get this wrong.
+      - Plain Thomas is **unstable** here: the matrix is not diagonally
+        dominant, and at `eps = 0.6` the peak pressure oscillates
+        86 / 538 / 270 / 2935 under grid refinement. Gauss-Seidel with
+        over-relaxation (`omega = 1.4`) is stable and grid-converged.
+
+      **The trap, and why this was stopped:**
+      - The closed-form long-bearing solution I first reached for,
+        `P = 3 eps sin(2 pi X) [1 + 2 eps cos(2 pi X)] / (2 eps^2 (1+eps^2)(1-2eps^2))`,
+        **does not satisfy the PDE**. Its residual against
+        `d/dX(H^3 dP/dX) = 6 dH/dX` is O(100), not O(1e-15). It was being
+        used as the validation target and would have "confirmed" a wrong
+        solver. Always check a recalled closed form against the residual
+        before trusting it.
+      - The real long-bearing solution has a pressure spike at
+        `eps = 1/sqrt(2)`, so naive quadrature over it is dominated by the
+        spike and the load integral is meaningless there anyway.
+      - Past roughly `eps = 0.4` the full-Sommerfeld condition is unphysical.
+        The film separates in the diverging region, the PDE drives the
+        pressure negative, and without Reynolds' supplementary cavitation
+        condition the solution **blows up** (8e5 at `eps = 0.5`) and reports
+        negative pressures for `eps >= 0.6`. A lubricant cannot sustain
+        negative pressure.
+      - A cavitation iteration was tried - solve, find where `P < 0`, force
+        `P = 0` from there, re-solve - and did not converge in a useful time
+        in the iteration budget available. It likely needs a better
+        outer-loop strategy (a sweep-line or pivot-based scheme rather than
+        60 repeated full solves) and a convergence test on the cavity
+        boundary rather than on `P`.
+
+      **What the third attempt should do:** implement the cavitation
+      iteration properly, then validate against invariants that need no
+      closed form. The PDE integrated over the full domain gives an exact
+      global constraint, `P'(1) = P'(0)` when `H(0) = H(1)`, which is the
+      natural form of the spec's "Reynolds equation satisfies global load
+      equilibrium" (line 128). Also check: pressure non-negative everywhere,
+      load vanishing as `eps -> 0` and `eps -> 1`, and a single-peaked load
+      curve. Only once those pass is it worth finding a trustworthy
+      benchmark to check the magnitude against.
+      - Kani: Reynolds global load equilibrium (line 128) stays blocked on this.
+
 - [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116)
 - [x] **LuGre dynamic friction** (line 119) - `tpt-fluids-tribo/src/friction.rs`,
       with Coulomb as the degenerate baseline, the Stribeck steady-state
