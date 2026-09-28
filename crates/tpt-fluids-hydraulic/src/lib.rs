@@ -56,11 +56,15 @@
 //!   Method of Characteristics solver for the canonical reservoir-fed pipe
 //!   under a prescribed valve closure.
 //!
-//! Still to come: the component curves (pumps, valves, cavitation, surge
-//! tanks) and the differentiable head-loss functions. The MOC solver is
-//! currently a single reach with a fixed-head reservoir upstream; a
-//! multi-node network with a wave-reflection boundary is not yet modelled.
+//! - [`components`]: valves from `Cv` or a `K` coefficient, pump curves,
+//!   cavitation state from the cavitation number, surge tanks, and minor-loss
+//!   coefficients.
+//!
+//! Still to come: the differentiable head-loss functions. The MOC solver is
+//! currently a single reach with a fixed-head reservoir upstream; a multi-node
+//! network with a wave-reflection boundary is not yet modelled.
 
+pub mod components;
 pub mod error;
 pub mod friction;
 pub mod gga;

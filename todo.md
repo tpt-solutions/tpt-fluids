@@ -150,8 +150,12 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       closure. The frictionless limit reproduces the Joukowsky rise exactly,
       which is the check that matters. Still to do: a multi-node network with
       wave reflection at boundaries, and the friction-damped rise integral.*
-- [ ] Implement component models: pump/turbine four-quadrant characteristic
-      curves, valve Cv models, cavitation inception, surge tank dynamics
+- [x] Implement component models: valve `Cv` and `K` coefficients, pump
+      characteristic curves (quadratic three-point fit, shut-off head, runout
+      flow, hydraulic power), cavitation state from the cavitation number, and
+      surge tank dynamics. Tabulated minor-loss coefficients for entrances,
+      elbows, and exits are included. The turbine four-quadrant curve is not
+      modelled beyond its loss coefficient.
 - [ ] Implement differentiable head-loss functions (via `tpt-math-autodiff`)
       for downstream pipe-sizing optimization
 - [x] Unit tests for the modules delivered so far — 12 friction tests,
