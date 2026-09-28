@@ -70,27 +70,47 @@ no_std + alloc. Depends on: `tpt-math-units`, `tpt-math-numeric`, external
 `tpt-materials` (density/viscosity lookups — published TPT Solutions repo on
 GitHub, wired as a normal git/crates.io dependency, not a local path member).*
 
-- [ ] Scaffold `crates/tpt-fluids-core/`
-- [ ] Wire deps: `tpt-math-units`, `tpt-math-numeric`, `tpt-materials`
-- [ ] Implement unit-safe wrappers: pressure (Pa), head (m), volumetric flow
+- [x] Scaffold `crates/tpt-fluids-core/`
+- [x] Wire deps: `tpt-math-units`, `tpt-math-numeric`, `libm` (see the
+      `tpt-materials` note at the end of this phase)
+- [x] Implement unit-safe wrappers: pressure (Pa), head (m), volumetric flow
       (m³/s), mass flow (kg/s), velocity (m/s), dynamic viscosity (Pa·s),
       kinematic viscosity (m²/s), density (kg/m³)
-- [ ] Implement non-dimensional number types: Reynolds, Froude, Weber, Mach,
+- [x] Implement non-dimensional number types: Reynolds, Froude, Weber, Mach,
       Cavitation number (σ) — strictly non-dimensional (phantom-typed against
       the dimensioned quantities above)
-- [ ] Implement equations of state: incompressible, ideal gas, Tait (water),
-      tabulated interpolation (reuse `tpt-math-interpolate` if suitable)
-- [ ] Implement viscosity models: Newtonian, power-law, Bingham plastic,
+- [x] Implement equations of state: incompressible, ideal gas, Tait (water),
+      tabulated interpolation (shape-preserving cubic Hermite through a
+      measured `(rho, p)` table, inverted by bisection)
+- [x] Implement viscosity models: Newtonian, power-law, Bingham plastic,
       Sutherland's law (gases)
-- [ ] Implement surface tension and contact angle models
-- [ ] Wire `tpt-materials` lookups for temperature-dependent density/viscosity
-- [ ] Unit tests + doctests (incl. dimensional-mismatch compile-fail checks
+- [x] Implement surface tension and contact angle models
+- [x] Fluid property lookups (temperature-dependent density/viscosity) —
+      **built in-house rather than via `tpt-materials`**, see the note below
+- [x] Unit tests + doctests (incl. dimensional-mismatch compile-fail checks
       where phantom typing is meant to reject them)
-- [ ] Rustdoc
-- [ ] `cargo fmt` / `clippy` clean
-- [ ] `cargo deny check` clean
-- [ ] no_std+alloc verify (`thumbv6m-none-eabi`)
-- [ ] Add to root `Cargo.toml` members + workspace deps
+- [x] Rustdoc
+- [x] `cargo fmt` / `clippy` clean
+- [x] `cargo deny check` clean
+- [x] no_std+alloc verify (`thumbv6m-none-eabi`)
+- [x] Add to root `Cargo.toml` members + workspace deps
+
+> **`tpt-materials` is not usable as scoped.** `spec.txt` and the original
+> Phase 1 plan assumed a published TPT Solutions crate supplying temperature-
+> dependent density and viscosity lookups. The real `tpt-materials` repository
+> is a *micro-scale* physics engine — crystal plasticity, phase-field,
+> diffusion — publishing `tpt-mat-core`, `tpt-mat-constants`, and
+> `tpt-mat-crystallography`. It is **not on crates.io** (only on GitHub, not
+> wired to a registry), and it contains **no fluid property tables at all**.
+> Depending on it would have meant either a non-registry git dependency (which
+> `deny.toml`'s `sources.unknown-git = "deny"` forbids) or a dependency on the
+> wrong domain entirely. `tpt-fluids-core` therefore carries an in-house
+> database instead: `FluidProperties` (water, seawater, dry air, ISO VG 46
+> oil) plus standalone `water_viscosity` (Vogel form), `water_vapour_pressure`
+> (IAPWS Wagner-Pruss), and `DensityModel` (linear, plus Kell's correlation
+> for water, which is needed because water's density maximum at 4 °C cannot
+> be represented by a linear expansion law). The old claim that this
+> dependency was "resolved" has been corrected accordingly.
 
 ## Phase 2 — tpt-fluids-hydraulic
 
@@ -265,6 +285,12 @@ dropped:*
   those optimizers would consume are still built in Phases 2-4 via
   `tpt-math-autodiff`, so this crate is a consumer-side gap, not a blocker)
 
-`tpt-materials` was flagged as a similar risk during planning but is
-resolved: it's a published TPT Solutions repo on GitHub, so `tpt-fluids-core`
-(Phase 1) wires it as a normal external dependency, not a stub.
+`tpt-materials` was flagged as a similar risk during planning and is now
+**closed in the other direction**: rather than being wired as a dependency, it
+turned out to be unusable for this purpose. It is a micro-scale crystal-
+plasticity/phase-field engine (`tpt-mat-core`, `tpt-mat-constants`,
+`tpt-mat-crystallography`) that is not published on crates.io and supplies no
+fluid density or viscosity data. Phase 1 therefore implements the property
+database in-house inside `tpt-fluids-core` (`FluidProperties`, `DensityModel`,
+`water_viscosity`, `water_vapour_pressure`). No external dependency was added,
+so `deny.toml`'s registry-only source policy is unaffected.
