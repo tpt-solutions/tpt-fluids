@@ -142,8 +142,13 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       a finite-difference check on the analytic conductance and against an
       independently derived reference solution.
 
-- [ ] Implement transient analysis: water hammer via Method of
+- [~] Implement transient analysis: water hammer via Method of
       Characteristics (MOC), Joukowsky equation, column separation modeling
+      - *the closed-form analytics are done and tested in `water_hammer.rs`:
+      wave speed `a = sqrt(K/rho)`, Joukowsky pressure and head rise, critical
+      time of closure `2L/a` with the severe-closure test, the Courant step
+      `dx/a`, and the column-separation margin. The MOC transient solver that
+      consumes them is still to come.*
 - [ ] Implement component models: pump/turbine four-quadrant characteristic
       curves, valve Cv models, cavitation inception, surge tank dynamics
 - [ ] Implement differentiable head-loss functions (via `tpt-math-autodiff`)

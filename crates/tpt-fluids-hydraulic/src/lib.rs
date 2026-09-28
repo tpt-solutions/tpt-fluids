@@ -51,11 +51,16 @@
 //! `forward` flag records which way round, and every sign in the Hardy Cross
 //! correction depends on it.
 //!
-//! Still to come: water-hammer transients, component curves, and
-//! differentiable head loss.
+//! [`water_hammer`] currently carries the closed-form water-hammer analytics
+//! the transient solver will be built on and checked against: wave speed,
+//! Joukowsky pressure and head rise, critical time of closure, the Courant
+//! time step, and column-separation criteria. The MOC transient solver itself,
+//! the component curves (pumps, valves, cavitation, surge tanks), and the
+//! differentiable head-loss functions are still to come.
 
 pub mod error;
 pub mod friction;
 pub mod gga;
 pub mod hardy_cross;
 pub mod network;
+pub mod water_hammer;
