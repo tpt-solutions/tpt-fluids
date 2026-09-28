@@ -131,7 +131,8 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       fundamental cycle-basis (loop) extraction
 - [ ] Implement Hardy Cross method (loop-based) network solver — *next up*
 - [ ] Implement Global Gradient Algorithm (node-based Newton-Raphson) network
-      solver (via `tpt-math-linalg`)
+      solver (via `tpt-math-linalg`) - **next up**; also the fix for the
+      multi-source case the Hardy Cross loop basis currently cannot handle
 - [ ] Implement transient analysis: water hammer via Method of
       Characteristics (MOC), Joukowsky equation, column separation modeling
 - [ ] Implement component models: pump/turbine four-quadrant characteristic
