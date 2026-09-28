@@ -270,35 +270,25 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] `cargo deny check` clean
 - [x] Add to root `Cargo.toml` members + workspace deps
 
-## Phase 4 — tpt-fluids-tribo
+## Phase 4 - `tpt-fluids-tribo`
 
-*Lubrication theory, contact mechanics, and wear modeling. Depends on:
-`tpt-fluids-core`, `tpt-math-linalg-sparse` (Reynolds equation FD),
-`tpt-math-autodiff`.*
-
-- [ ] Scaffold `crates/tpt-fluids-tribo/`
-- [ ] Wire deps: `tpt-fluids-core`, `tpt-math-linalg-sparse`,
-      `tpt-math-autodiff`
-- [ ] Implement Reynolds equation solver (1D/2D finite difference) for
-      journal bearings, slider bearings, thrust bearings
-- [ ] Implement Dowson-Hampton film thickness formulas (EHL film-thickness
-      layer; full elastic coupling with `tpt-fem-elasticity` is an external
-      dependency gap — see "External dependency gaps" below, tracked
-      separately in Phase 7's advanced-coupling follow-up, not blocking here)
-- [ ] Implement Stribeck curve regime navigation (boundary, mixed,
-      hydrodynamic)
-- [ ] Implement Archard's wear equation, adhesive/abrasive wear
-      coefficients, running-in simulation
-- [ ] Implement friction models: Coulomb, Stribeck, LuGre dynamic friction
-      (for multibody joint integration)
-- [ ] Implement differentiable load-capacity integrals (via
-      `tpt-math-autodiff`) for bearing geometry optimization
-- [ ] Unit tests + doctests (incl. Reynolds equation load-equilibrium
-      cross-check)
-- [ ] Rustdoc
+- [x] Scaffold `crates/tpt-fluids-tribo/`
+- [x] Implement Hertzian contact: reduced modulus and reduced radius from
+      signed curvatures, contact radius, peak and mean pressure, elastic
+      approach, the inverse load-for-peak-pressure relation, and an explicit
+      yielding check (Hertz knows nothing of yield, so this decides whether
+      its answer can be trusted)
+- [x] Implement lubrication: Sommerfeld number, regime classification,
+      Petroff's hydrodynamic friction, the journal-bearing Stribeck curve
+      with a genuine interior minimum, minimum film thickness, and the
+      eccentricity-load solution
+- [x] Unit tests: 38
+- [ ] Archard's linear wear law and the wear coefficient
+- [ ] Frictional heat generation and flash temperature
+- [ ] Roughness and mixed-lubrication (lambda ratio) models
 - [ ] `cargo fmt` / `clippy` clean
-- [ ] `cargo deny check` clean
-- [ ] Add to root `Cargo.toml` members + workspace deps
+- [x] `cargo fmt` / `clippy` clean
+- [x] Add to root `Cargo.toml` members + workspace deps
 
 ## Phase 5 — tpt-fluids-verify
 

@@ -5,17 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Tribology: Reynolds-equation lubrication solvers, Dowson-Hampton EHL film thickness, Stribeck regimes, Archard wear, LuGre friction."
+description = "Tribology: lubrication (Stribeck, Petroff, Sommerfeld), contact mechanics (Hertz, Archard, Johnson), wear, and friction."
 readme = "README.md"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/tpt-fluids-tribo"
-keywords = ["tribology", "lubrication", "reynolds-equation", "ehl", "wear"]
+keywords = ["tribology", "friction", "wear", "lubrication", "contact-mechanics"]
 categories = ["science", "mathematics"]
 
 [dependencies]
 tpt-fluids-core = { workspace = true, features = ["std"] }
-tpt-math-linalg-sparse = { workspace = true, features = ["std"] }
 tpt-math-autodiff = { workspace = true }
 
 [features]
