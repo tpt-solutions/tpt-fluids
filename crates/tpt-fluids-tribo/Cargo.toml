@@ -1,0 +1,26 @@
+[package]
+name = "tpt-fluids-tribo"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Tribology: Reynolds-equation lubrication solvers, Dowson-Hampton EHL film thickness, Stribeck regimes, Archard wear, LuGre friction."
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/tpt-fluids-tribo"
+keywords = ["tribology", "lubrication", "reynolds-equation", "ehl", "wear"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+tpt-fluids-core = { workspace = true, features = ["std"] }
+tpt-math-linalg-sparse = { workspace = true, features = ["std"] }
+tpt-math-autodiff = { workspace = true }
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "tpt-fluids"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Feature-gated umbrella crate over the tpt-fluids applied fluid mechanics workspace."
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/tpt-fluids"
+keywords = ["fluids", "hydraulics", "marine", "tribology", "umbrella"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+tpt-fluids-core = { workspace = true, optional = true }
+tpt-fluids-hydraulic = { workspace = true, optional = true }
+tpt-fluids-marine = { workspace = true, optional = true }
+tpt-fluids-tribo = { workspace = true, optional = true }
+tpt-fluids-verify = { workspace = true, optional = true }
+
+[features]
+default = ["core", "hydraulic", "marine", "tribo"]
+core = ["dep:tpt-fluids-core"]
+hydraulic = ["core", "dep:tpt-fluids-hydraulic"]
+marine = ["core", "dep:tpt-fluids-marine"]
+tribo = ["core", "dep:tpt-fluids-tribo"]
+verify = ["hydraulic", "marine", "tribo", "dep:tpt-fluids-verify"]
+
+[lints]
+workspace = true

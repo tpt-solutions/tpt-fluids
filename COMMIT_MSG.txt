@@ -1,0 +1,7 @@
+Phase 0: bootstrap tpt-fluids workspace
+
+Root workspace manifest (resolver 2, MIT OR Apache-2.0, MSRV 1.84 matched to
+tpt-math), rust-toolchain.toml, rustfmt.toml, deny.toml mirroring tpt-math's
+license allow-list, CI workflow, dual licenses, crate stubs, and README.
+
+cargo build / fmt / deny check all clean.

@@ -1,0 +1,31 @@
+[package]
+name = "tpt-fluids-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Foundational fluid layer: unit-safe types, equations of state, viscosity models, and a built-in fluid property database."
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/tpt-fluids-core"
+keywords = ["fluids", "units", "dimensional-analysis", "viscosity", "thermodynamics", "no-std"]
+categories = ["science", "mathematics", "no-std"]
+
+[dependencies]
+tpt-math-units = { workspace = true }
+tpt-math-numeric = { workspace = true }
+tpt-math-interpolate = { workspace = true, optional = true }
+libm = { version = "0.2.16", default-features = false }
+
+[features]
+default = ["std"]
+std = ["tpt-math-units/std", "tpt-math-numeric/std", "alloc"]
+alloc = ["tpt-math-units/alloc", "tpt-math-numeric/alloc", "tpt-math-interpolate?/alloc"]
+# Tabulated equations of state / property tables via `tpt-math-interpolate`'s
+# monotone PCHIP. Off by default to keep the bare-metal build minimal.
+interpolate = ["dep:tpt-math-interpolate"]
+
+[lints]
+workspace = true

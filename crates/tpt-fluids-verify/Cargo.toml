@@ -1,0 +1,28 @@
+[package]
+name = "tpt-fluids-verify"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Verification harnesses for tpt-fluids: Kani proofs of solver safety and proptest strategies for physical invariants."
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/tpt-fluids-verify"
+keywords = ["verification", "kani", "proptest", "invariants", "formal-methods"]
+categories = ["science", "development-tools::testing"]
+
+[dependencies]
+tpt-fluids-core = { workspace = true, features = ["std"] }
+tpt-fluids-hydraulic = { workspace = true, features = ["std"] }
+tpt-fluids-marine = { workspace = true, features = ["std"] }
+tpt-fluids-tribo = { workspace = true, features = ["std"] }
+proptest = { workspace = true }
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

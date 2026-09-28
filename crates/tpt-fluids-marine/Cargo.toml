@@ -1,0 +1,25 @@
+[package]
+name = "tpt-fluids-marine"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Naval architecture: ship resistance (ITTC-57, Michell, Holtrop-Mennen), Froude scaling, seakeeping RAOs, MMG maneuvering, propulsion."
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/tpt-fluids-marine"
+keywords = ["marine", "naval-architecture", "ship-resistance", "seakeeping", "hydrodynamics"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+tpt-fluids-core = { workspace = true, features = ["std"] }
+tpt-math-autodiff = { workspace = true }
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

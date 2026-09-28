@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tpt-fluids-core",
+    "crates/tpt-fluids-hydraulic",
+    "crates/tpt-fluids-marine",
+    "crates/tpt-fluids-tribo",
+    "crates/tpt-fluids-verify",
+    "crates/tpt-fluids",
+]
+exclude = []
+
+[workspace.package]
+description = "tpt-fluids — applied fluid mechanics: hydraulic networks, marine hydrodynamics, tribology"
+authors = ["TPT Solutions"]
+edition = "2021"
+rust-version = "1.84"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/tpt-solutions/tpt-fluids"
+repository = "https://github.com/tpt-solutions/tpt-fluids"
+
+[workspace.dependencies]
+# Internal crates.
+tpt-fluids-core = { version = "0.1.0", path = "crates/tpt-fluids-core", default-features = false }
+tpt-fluids-hydraulic = { version = "0.1.0", path = "crates/tpt-fluids-hydraulic", default-features = false }
+tpt-fluids-marine = { version = "0.1.0", path = "crates/tpt-fluids-marine", default-features = false }
+tpt-fluids-tribo = { version = "0.1.0", path = "crates/tpt-fluids-tribo", default-features = false }
+tpt-fluids-verify = { version = "0.1.0", path = "crates/tpt-fluids-verify", default-features = false }
+
+# `tpt-math` substrate (published on crates.io, MIT OR Apache-2.0).
+tpt-math-numeric = { version = "0.1.0", default-features = false }
+tpt-math-units = { version = "0.1.0", default-features = false }
+tpt-math-graph = { version = "0.1.0", default-features = false }
+tpt-math-linalg = { version = "0.1.0", default-features = false }
+tpt-math-linalg-sparse = { version = "0.1.0", default-features = false }
+tpt-math-linalg-fixed = { version = "0.1.0", default-features = false }
+tpt-math-interpolate = { version = "0.1.0", default-features = false }
+tpt-math-autodiff = { version = "0.1.0", default-features = false }
+tpt-math-signal-fft = { version = "0.1.0", default-features = false }
+
+# Dev/verification tooling. `proptest` is MIT OR Apache-2.0.
+proptest = "1.11"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+overflow-checks = true

@@ -15,26 +15,26 @@
 
 (one-time; mirrors `tpt-math`'s bootstrap shape)
 
-- [ ] Create root `Cargo.toml` (workspace `resolver = "2"`; `[workspace.package]`:
-      `edition = "2021"`, `rust-version` (match `tpt-math`'s MSRV floor once
-      the internal deps it pulls in are known), `license = "MIT OR Apache-2.0"`,
+- [x] Create root `Cargo.toml` (workspace `resolver = "2"`; `[workspace.package]`:
+      `edition = "2021"`, `rust-version = "1.84"` (matched to `tpt-math`'s MSRV
+      floor, which its published internal deps declare), `license = "MIT OR Apache-2.0"`,
       `authors = ["TPT Solutions"]`, `homepage`/`repository` URLs)
-- [ ] `rust-toolchain.toml`
-- [ ] `rustfmt.toml`
-- [ ] `deny.toml` (license allow-list: `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`,
+- [x] `rust-toolchain.toml`
+- [x] `rustfmt.toml`
+- [x] `deny.toml` (license allow-list: `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`,
       `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-3.0`, `Zlib`, `CC0-1.0`, `MPL-2.0`
       — same allow-list as `tpt-math`; `advisories.yanked = "deny"`,
       `sources.unknown-registry = "deny"`, `sources.unknown-git = "deny"`)
-- [ ] `.github/workflows/ci.yml`
-- [ ] `LICENSE-MIT` and `LICENSE-APACHE`
-- [ ] Create empty `crates/` directory
-- [ ] Add Rust `.gitignore` (`/target`, etc.)
-- [ ] Write root `README.md` stub — tpt-fluids's role as the applied fluid
+- [x] `.github/workflows/ci.yml`
+- [x] `LICENSE-MIT` and `LICENSE-APACHE`
+- [x] Create empty `crates/` directory
+- [x] Add Rust `.gitignore` (`/target`, etc.)
+- [x] Write root `README.md` stub — tpt-fluids's role as the applied fluid
       mechanics layer for `tpt-construction`/`tpt-engineering`/`tpt-physics`/
       `tpt-aero`; link to `spec.txt`
-- [ ] `git init` (local only, unless/until a remote is requested)
-- [ ] Initial commit
-- [ ] Sanity check: `cargo build` succeeds on the empty workspace
+- [x] `git init` (local only, unless/until a remote is requested)
+- [x] Initial commit
+- [x] Sanity check: `cargo build` succeeds on the empty workspace
 
 ## Per-Crate Checklist Template
 
