@@ -156,8 +156,13 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       surge tank dynamics. Tabulated minor-loss coefficients for entrances,
       elbows, and exits are included. The turbine four-quadrant curve is not
       modelled beyond its loss coefficient.
-- [ ] Implement differentiable head-loss functions (via `tpt-math-autodiff`)
-      for downstream pipe-sizing optimization
+- [x] Implement differentiable head-loss functions (via `tpt-math-autodiff`)
+      for downstream pipe-sizing optimization. `differentiable.rs` evaluates
+      Darcy-Weisbach over forward-mode dual numbers, so the diameter
+      sensitivity comes out exactly in one pass. Supports the laminar,
+      Swamee-Jain, and Hazen-Williams correlations analytically; a
+      finite-difference fallback covers the implicit Colebrook-White.
+
 - [x] Unit tests for the modules delivered so far — 12 friction tests,
       including a *residual* test that checks the Colebrook-White output
       satisfies its own defining equation to 1e-6 independently of the

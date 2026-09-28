@@ -60,11 +60,15 @@
 //!   cavitation state from the cavitation number, surge tanks, and minor-loss
 //!   coefficients.
 //!
-//! Still to come: the differentiable head-loss functions. The MOC solver is
-//! currently a single reach with a fixed-head reservoir upstream; a multi-node
-//! network with a wave-reflection boundary is not yet modelled.
+//! - [`differentiable`]: head loss over forward-mode dual numbers, so a
+//!   gradient-based optimiser gets `dh/dD` exactly rather than by finite
+//!   differences.
+//!
+//! Still to come in this crate: the multi-node MOC network with wave
+//! reflection, and the turbine four-quadrant characteristic curve.
 
 pub mod components;
+pub mod differentiable;
 pub mod error;
 pub mod friction;
 pub mod gga;

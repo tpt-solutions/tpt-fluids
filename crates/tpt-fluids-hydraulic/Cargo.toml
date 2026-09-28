@@ -17,7 +17,7 @@ categories = ["science", "mathematics"]
 tpt-fluids-core = { workspace = true, features = ["std"] }
 tpt-math-graph = { workspace = true, features = ["std"] }
 tpt-math-linalg = { workspace = true, features = ["std"] }
-tpt-math-autodiff = { workspace = true }
+tpt-math-autodiff = { workspace = true, features = ["tpt-math-autodiff-fwd"] }
 
 [features]
 default = ["std"]
