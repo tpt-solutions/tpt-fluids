@@ -144,11 +144,12 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
 
 - [~] Implement transient analysis: water hammer via Method of
       Characteristics (MOC), Joukowsky equation, column separation modeling
-      - *the closed-form analytics are done and tested in `water_hammer.rs`:
-      wave speed `a = sqrt(K/rho)`, Joukowsky pressure and head rise, critical
-      time of closure `2L/a` with the severe-closure test, the Courant step
-      `dx/a`, and the column-separation margin. The MOC transient solver that
-      consumes them is still to come.*
+      - *done so far in `water_hammer.rs`*: wave speed, Joukowsky rise,
+      critical closure time, Courant validation, column-separation clamping,
+      and a MOC solver for a reservoir-fed pipe under a prescribed valve
+      closure. The frictionless limit reproduces the Joukowsky rise exactly,
+      which is the check that matters. Still to do: a multi-node network with
+      wave reflection at boundaries, and the friction-damped rise integral.*
 - [ ] Implement component models: pump/turbine four-quadrant characteristic
       curves, valve Cv models, cavitation inception, surge tank dynamics
 - [ ] Implement differentiable head-loss functions (via `tpt-math-autodiff`)

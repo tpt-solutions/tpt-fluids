@@ -51,12 +51,15 @@
 //! `forward` flag records which way round, and every sign in the Hardy Cross
 //! correction depends on it.
 //!
-//! [`water_hammer`] currently carries the closed-form water-hammer analytics
-//! the transient solver will be built on and checked against: wave speed,
-//! Joukowsky pressure and head rise, critical time of closure, the Courant
-//! time step, and column-separation criteria. The MOC transient solver itself,
-//! the component curves (pumps, valves, cavitation, surge tanks), and the
-//! differentiable head-loss functions are still to come.
+//! - [`water_hammer`]: water-hammer analytics (wave speed, Joukowsky rise,
+//!   critical closure time, Courant step, column separation) and a
+//!   Method of Characteristics solver for the canonical reservoir-fed pipe
+//!   under a prescribed valve closure.
+//!
+//! Still to come: the component curves (pumps, valves, cavitation, surge
+//! tanks) and the differentiable head-loss functions. The MOC solver is
+//! currently a single reach with a fixed-head reservoir upstream; a
+//! multi-node network with a wave-reflection boundary is not yet modelled.
 
 pub mod error;
 pub mod friction;
