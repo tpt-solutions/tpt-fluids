@@ -33,5 +33,6 @@ extern crate alloc;
 
 pub mod error;
 pub mod froude_scaling;
+pub mod propulsion;
 pub mod resistance;
 pub mod seakeeping;

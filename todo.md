@@ -202,7 +202,7 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
 - [x] Principal dimensions, block coefficient validation, volume and
       displacement, and the power relationships (delivered power, effective
       horsepower, and the inverted speed-for-power a sizing loop needs)
-- [x] Unit tests: 48, with the ITTC-1957 line checked against the published
+- [x] Unit tests: 67, with the ITTC-1957 line checked against the published
       figure (`C_f x 10^3` ~ 38 for a 300 m tanker at 12.5 kn) and the
       model-ship line checked for its exact `W^(2/3) V^6` scaling
 - [x] Froude scaling: model-to-ship extrapolation with form factor and
@@ -222,8 +222,14 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       not attempted; the SDOF form is documented as an approximation.
 - [ ] Implement the MMG model for 3-DOF horizontal-plane manoeuvring (surge,
       sway, yaw), hydrodynamic derivatives
-- [ ] Implement propulsion: wake fraction, thrust deduction, propeller-hull
-      interaction, open-water diagrams
+- [x] Implement propulsion: wake fraction, thrust deduction, propeller-hull
+      interaction, open-water coefficients. `propulsion.rs` carries the
+      `T = K_T rho n^2 D^4` and `Q = K_Q rho n^2 D^5` definitions, the
+      advance ratio, the open-water and propulsive efficiencies, the wake
+      reduction, thrust deduction, quasi-propulsive coefficient, tip speed,
+      and the cavitation-limited diameter. Validated against an independent
+      actuator-disc estimate, which back-solves K_T ~ 0.38, and against a
+      3000 DWT feeder design point at 18 kn.
 - [ ] Make the Michell integral differentiable via `tpt-math-autodiff` for
       hull-form optimization
 - [ ] Integration test: model-ship resistance extrapolation matches

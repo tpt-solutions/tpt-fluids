@@ -58,6 +58,11 @@ impl Dimension {
     pub const ACCELERATION: Self = Self::new(1, 0, -2, 0);
     /// Kilograms per cubic metre.
     pub const DENSITY: Self = Self::new(-3, 1, 0, 0);
+    /// Radians per second. The radian is dimensionless, so this carries the
+    /// reciprocal-second exponent in the time slot.
+    pub const ANGULAR_RATE: Self = Self::new(0, 0, 0, -1);
+    /// Newton-metres.
+    pub const TORQUE: Self = Self::new(2, 1, -2, 0);
     /// Pascals.
     pub const PRESSURE: Self = Self::new(-1, 1, -2, 0);
     /// Newtons.
@@ -348,6 +353,19 @@ dimensioned!(
 dimensioned!(
     /// A pressure, in pascals.
     Pressure, "Pa", Dimension::PRESSURE
+);
+dimensioned!(
+    /// An angular rate, in radians per second.
+    ///
+    /// Note this is radians per second, *not* revolutions per minute. The
+    /// two are used interchangeably in propeller work, and confusing them is a
+    /// factor of about 9.5 in any computed thrust, so the unit is stated
+    /// rather than left to the reader.
+    AngularRate, "rad/s", Dimension::ANGULAR_RATE
+);
+dimensioned!(
+    /// A torque, in newton-metres.
+    Torque, "N*m", Dimension::TORQUE
 );
 dimensioned!(
     /// A force, in newtons.
