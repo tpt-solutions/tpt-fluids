@@ -42,6 +42,12 @@ macro_rules! kani_proof {
 #[cfg(kani)]
 use tpt_fluids_core::quantity::{AngularRate, Density, Length, Velocity};
 #[cfg(kani)]
+use tpt_fluids_hydraulic::hardy_cross::loop_correction;
+#[cfg(kani)]
+use tpt_fluids_hydraulic::water_hammer::{
+    frictionless_head_rise, momentum_coefficient, validate_courant, Branch,
+};
+#[cfg(kani)]
 use tpt_fluids_marine::propulsion::open_water_thrust;
 #[cfg(kani)]
 use tpt_fluids_marine::resistance::ittc_57_friction;
@@ -155,6 +161,119 @@ kani_proof! {
         kani::assert(t.is_finite(), "thrust must be finite");
     }
 
+    /// The Hardy Cross correction must always act against the imbalance it is
+    /// correcting, for a purely resistive loop.
+    ///
+    /// This is the convergence property, and it is worth being precise about
+    /// what it does and does not say. The signed loop resistance of a
+    /// dissipative loop is positive, and `dQ * dh = -dh^2 / R <= 0`, so the
+    /// correction never pushes the imbalance *up*. That is what rules out
+    /// oscillation.
+    ///
+    /// It does **not** prove convergence rate, and no such proof is claimed:
+    /// the head loss is quadratic in flow, so the correction is a fixed-point
+    /// step rather than a Newton step and can be arbitrarily slow when the loop
+    /// mixes very large and very small resistances. That is precisely the
+    /// documented weakness of Hardy Cross, and the reason
+    /// `tpt_fluids_hydraulic::gga` exists.
+    fn hardy_cross_correction_never_amplifies_the_imbalance() {
+        let imbalance: f64 = kani::any();
+        let resistance: f64 = kani::any();
+        kani::assume(imbalance.is_finite());
+        // A resistive loop: every link dissipates, so the signed sum is
+        // positive. Bounded away from zero because the solver skips loops whose
+        // resistance underflows, so this covers every case it acts on.
+        kani::assume(resistance > 1.0e-6 && resistance < 1.0e9);
+
+        let delta = loop_correction(imbalance, resistance);
+        kani::assert(
+            delta * imbalance <= 0.0,
+            "a resistive loop correction must not amplify its own imbalance",
+        );
+        kani::assert(delta.is_finite(), "the correction must be finite");
+        // And it must be non-zero whenever there is imbalance to correct,
+        // otherwise the sweep would stall with work still to do.
+        if imbalance != 0.0 {
+            kani::assert(delta != 0.0, "a non-zero imbalance must produce a correction");
+        }
+    }
+
+    /// A larger imbalance must produce a proportionally larger correction, and a
+    /// stiffer loop a smaller one. If either direction were wrong the solver
+    /// would under- or over-correct systematically rather than randomly, which
+    /// is a far harder failure to notice than a wrong answer on one network.
+    fn hardy_cross_correction_scales_the_right_way_round() {
+        let imbalance: f64 = kani::any();
+        let resistance: f64 = kani::any();
+        kani::assume(imbalance > 1.0e-3 && imbalance < 1.0e6);
+        kani::assume(resistance > 1.0e-3 && resistance < 1.0e6);
+
+        let base = loop_correction(imbalance, resistance);
+        // More imbalance, same loop: a larger correction, same direction.
+        assert_more_negative(loop_correction(2.0 * imbalance, resistance), base);
+        // Same imbalance, stiffer loop: a smaller correction, same sign.
+        assert_more_negative(base, loop_correction(imbalance, 2.0 * resistance));
+    }
+
+    /// The MOC Courant condition must accept every step at or under the
+    /// physical limit and reject every step beyond it.
+    ///
+    /// The stability limit is `dt = L / a`: a larger step lets a wave travel
+    /// more than one reach per step and the characteristics cross, which is not
+    /// an inaccurate answer but an *unstable* one, so the check has to be exact
+    /// rather than approximate. The solver is defined by `dt = dx / a` sitting
+    /// exactly at that limit, so a check that rejected the limit itself would
+    /// make the method unusable; the `1 + 1e-6` guard below is only there to
+    /// keep rounding from producing a spurious counterexample at the boundary.
+    fn moc_courant_condition_is_exact_at_its_limit() {
+        let length: f64 = kani::any();
+        let wave_speed: f64 = kani::any();
+        let dt: f64 = kani::any();
+        kani::assume(length > 1.0e-3 && length < 1.0e5);
+        kani::assume(wave_speed > 1.0 && wave_speed < 1.0e4);
+        kani::assume(dt > 0.0 && dt < 1.0e5);
+
+        let branch = Branch {
+            node: 1,
+            length,
+            wave_speed,
+            area: 0.07,
+            resistance: 0.0,
+            check_valve: false,
+        };
+        let limit = length / wave_speed;
+
+        if dt <= limit {
+            kani::assert(validate_courant(&branch, dt).is_ok(), "a stable step was rejected");
+        } else if dt > limit * (1.0 + 1.0e-6) {
+            kani::assert(validate_courant(&branch, dt).is_err(), "an unstable step was accepted");
+        }
+        // The solver's own step is the limit, so it must be accepted: this is
+        // the case a too-strict tolerance would break.
+        kani::assert(validate_courant(&branch, limit).is_ok());
+    }
+
+    /// A valve slamming shut on a frictionless pipe must produce exactly the
+    /// Joukowsky rise, whatever the wave speed and initial flow.
+    ///
+    /// This is the one water-hammer result checkable in closed form, so it is
+    /// the one that catches a sign error in the momentum equation. A rise of the
+    /// wrong sign would be a physically impossible suction, and a test that
+    /// only compared magnitudes would not notice.
+    fn joukowsky_rise_is_produced_by_a_full_stop() {
+        let wave_speed: f64 = kani::any();
+        let flow: f64 = kani::any();
+        kani::assume(wave_speed > 1.0 && wave_speed < 1.0e4);
+        kani::assume(flow > 1.0e-6 && flow < 1.0e3);
+
+        let rise = frictionless_head_rise(wave_speed, -flow);
+        // dH = (a/g) dQ, and a full stop is dQ = -Q0, so the rise is positive
+        // and equal to a Q0 / g.
+        let expected = momentum_coefficient(wave_speed) * flow;
+        kani::assert(rise > 0.0, "a full stop must raise the head, never lower it");
+        kani::assert((rise - expected).abs() / expected < 1.0e-12);
+    }
+
     /// The velocity and length types must not admit `NaN` through the
     /// constructors, since every downstream calculation assumes they are
     /// finite. Proving it here documents that the assumption is safe.
@@ -164,4 +283,16 @@ kani_proof! {
         let vel = Velocity::new(v);
         kani::assert(vel.value().is_finite());
     }
+}
+
+/// Asserts `a` is at least as negative as `b`, which is the direction the two
+/// Hardy Cross scaling comparisons both run in: a more demanding correction is
+/// always the more negative one.
+#[cfg(kani)]
+fn assert_more_negative(a: f64, b: f64) {
+    kani::assert(a.is_finite() && b.is_finite());
+    kani::assert(
+        a <= b,
+        "the larger demand must give the more negative correction",
+    );
 }

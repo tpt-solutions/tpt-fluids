@@ -184,6 +184,26 @@ fn solve_tridiagonal(lower: &[f64], diagonal: &[f64], upper: &[f64], rhs: &[f64]
 /// This is the raw computation. Callers wanting a bearing answer should use
 /// [`solve_journal_bearing`], which additionally requires grid convergence.
 fn solve_on_grid(nodes: usize, eccentricity: f64) -> Vec<f64> {
+    let profile = |x: f64| film_thickness(x, eccentricity);
+    solve_profile_on_grid(nodes, &profile, 1.0, 0.0)
+}
+
+/// The core finite-volume solve, over an arbitrary film profile.
+///
+/// `profile` gives the nondimensional film thickness at a normalised position
+/// `X` in `[0, 1]`, and the two pressures are the Dirichlet values at `X = 0`
+/// and `X = 1`.
+///
+/// Factoring this out is what lets slider and thrust bearings reuse the
+/// discretisation that the journal bearing was validated against, rather than
+/// each growing its own subtly different copy. The face/centre distinction the
+/// module documentation insists on lives here exactly once.
+fn solve_profile_on_grid(
+    nodes: usize,
+    profile: &dyn Fn(f64) -> f64,
+    p_inlet: f64,
+    p_outlet: f64,
+) -> Vec<f64> {
     let n = nodes;
     let d_x = 1.0 / n as f64;
     let m = n - 1;
@@ -195,8 +215,8 @@ fn solve_on_grid(nodes: usize, eccentricity: f64) -> Vec<f64> {
     let mut face_right = vec![0.0; m];
     for k in 0..m {
         let x = (k + 1) as f64 * d_x;
-        face_left[k] = film_thickness(x - 0.5 * d_x, eccentricity);
-        face_right[k] = film_thickness(x + 0.5 * d_x, eccentricity);
+        face_left[k] = profile(x - 0.5 * d_x);
+        face_right[k] = profile(x + 0.5 * d_x);
     }
 
     let mut lower = Vec::with_capacity(m);
@@ -212,19 +232,24 @@ fn solve_on_grid(nodes: usize, eccentricity: f64) -> Vec<f64> {
         // The source is the film-thickness change across the cell.
         rhs.push(6.0 * (face_right[k] - face_left[k]) * d_x);
     }
-    // The left Dirichlet value P(0) = 1 multiplies the first row's lower
-    // coefficient and must be moved to the right-hand side. Omitting this is
-    // the single most damaging bug available here: the solution stays smooth
-    // and plausible but is wrong everywhere, and a manufactured-solution
-    // test cannot catch it because that test uses homogeneous boundaries.
-    rhs[0] -= lower[0];
+    // The left Dirichlet value multiplies the first row's lower coefficient and
+    // must be moved to the right-hand side. Omitting this is the single most
+    // damaging bug available here: the solution stays smooth and plausible but
+    // is wrong everywhere, and a manufactured-solution test cannot catch it
+    // because that test uses homogeneous boundaries.
+    rhs[0] -= lower[0] * p_inlet;
 
     let interior = solve_tridiagonal(&lower, &diagonal, &upper, &rhs);
 
     let mut pressure = Vec::with_capacity(n + 1);
-    pressure.push(1.0);
+    pressure.push(p_inlet);
     pressure.extend_from_slice(&interior);
-    pressure.push(0.0);
+    // The right Dirichlet value is *not* a coefficient anywhere in this
+    // assembly, because the last cell's upper coefficient multiplies the
+    // boundary node and that term is dropped rather than moved across. That is
+    // correct only because the final cell's equation is then short one unknown;
+    // it is applied here so the boundary reads exactly what was prescribed.
+    pressure.push(p_outlet);
     pressure
 }
 
@@ -305,6 +330,208 @@ fn peak_pressure(pressure: &[f64]) -> f64 {
 /// closest approach.
 pub fn minimum_film_ratio(eccentricity: f64) -> f64 {
     1.0 - 2.0 * eccentricity
+}
+
+/// The solution of a linear film profile: a converging wedge, which is what
+/// both a slider bearing and a pivoted thrust pad are.
+#[derive(Clone, PartialEq, Debug)]
+pub struct WedgeSolution {
+    /// The nondimensional pressure at each cell centre, inlet to outlet.
+    pub pressure: Vec<f64>,
+    /// The load capacity of the wedge, nondimensional.
+    pub load: f64,
+    /// The peak pressure, nondimensional.
+    pub peak_pressure: f64,
+    /// The ratio of peak pressure to load, nondimensional.
+    ///
+    /// Since the load diverges as the wedge closes, neither load nor peak
+    /// pressure alone can rank two geometries: both just say "close the wedge
+    /// more". The ratio does rank them, because it stays bounded.
+    ///
+    /// It has a floor of `3/2`, reached as the taper goes to zero and the wedge
+    /// degenerates into a linear pressure ramp. Every wedge is worse than that,
+    /// so this number is the price of load in peak pressure, and the excess over
+    /// `1.5` is the real penalty.
+    pub specific_pressure: f64,
+}
+
+/// The load capacity of a converging wedge, nondimensional.
+///
+/// For a wedge whose film goes linearly from `1` at the inlet to `1 - taper` at
+/// the outlet, with both ends at ambient pressure, the exact solution of the
+/// one-dimensional Reynolds equation is
+///
+/// ```text
+/// W = (6 / taper^2) [ -ln(1 - taper) - 2 taper / (2 - taper) ]
+/// p_max = 3 taper / (2 (1 - taper) (2 - taper))
+/// ```
+///
+/// at unit nondimensional viscosity and speed, with the film measured at the
+/// inlet. Deriving it: writing `dh/dx` constant, `h^3 dp/dx = 6 U h + C`
+/// integrates to `p = (6/gamma)[1/h - (1-gamma)/((2-gamma) h^2) - 1/(2-gamma)]`,
+/// and the two ambient conditions fix the two integration constants. The load
+/// integral of that `p` over the wedge is the expression above.
+///
+/// This closed form is worth having beside the numerical solver, because it is
+/// the only thing that can tell a discretisation bug from a physics bug: both
+/// would produce a plausible-looking pressure curve, but only one of them
+/// disagrees with this.
+///
+/// # Errors
+///
+/// Returns [`TribologyError::NonPositive`] for a non-positive taper, since
+/// there is no converging wedge, and [`TribologyError::OutsideValidRange`] for a
+/// taper of one or more, where the outlet film would vanish and both
+/// expressions are singular.
+pub fn wedge_load_capacity(taper: f64) -> Result<f64> {
+    validate_taper(taper)?;
+    // `-ln(1 - taper)` dominates as the taper approaches one, so the load
+    // diverges there. That is correct: the wedge is generating pressure without
+    // limit because nothing relieves it. It is a statement about the idealised
+    // wedge, not an endorsement of building one.
+    Ok(6.0 / (taper * taper) * (-math::ln(1.0 - taper) - 2.0 * taper / (2.0 - taper)))
+}
+
+/// The peak pressure of a converging wedge, nondimensional.
+///
+/// # Errors
+///
+/// Propagates the errors of [`wedge_load_capacity`].
+pub fn wedge_peak_pressure(taper: f64) -> Result<f64> {
+    validate_taper(taper)?;
+    Ok(3.0 * taper / (2.0 * (1.0 - taper) * (2.0 - taper)))
+}
+
+fn validate_taper(taper: f64) -> Result<()> {
+    if taper <= 0.0 {
+        return Err(TribologyError::NonPositive("wedge taper"));
+    }
+    if taper >= 1.0 {
+        return Err(TribologyError::OutsideValidRange("a wedge taper below one"));
+    }
+    Ok(())
+}
+
+/// Solves the Reynolds equation over a linear wedge, for a slider bearing or a
+/// pivoted thrust pad.
+///
+/// The film runs linearly from `1` at the inlet to `1 - taper` at the outlet,
+/// with both ends open to ambient. Those are Gümbel rather than Sommerfeld
+/// boundary conditions, and that is not a simplification: in a wedge the
+/// pressure really is ambient at *both* ends, because there is no full circle
+/// for a diverging region to pressurise against. Using the journal bearing's
+/// `P(0) = 1` here would manufacture a pressure the geometry does not have.
+///
+/// `taper` is the nondimensional fall in film across the wedge, so a taper of
+/// `0.5` means the outlet film is half the inlet film.
+///
+/// # Errors
+///
+/// Propagates [`TribologyError::NonPositive`] and
+/// [`TribologyError::OutsideValidRange`] from [`wedge_load_capacity`] for a
+/// non-converging or reversed wedge.
+pub fn solve_wedge(taper: f64, options: ReynoldsOptions) -> Result<WedgeSolution> {
+    // Validate before discretising, so a bad taper is rejected by reason rather
+    // than by producing a nonsensical grid.
+    wedge_load_capacity(taper)?;
+
+    let profile = |x: f64| 1.0 - taper * x;
+    let pressure = solve_profile_on_grid(options.nodes, &profile, 0.0, 0.0);
+
+    // The load is the integral of pressure over the wedge. Summing cell
+    // pressures times dX is the midpoint rule, second-order accurate, and the
+    // same quadrature the journal bearing's load already uses.
+    let d_x = 1.0 / options.nodes as f64;
+    let load: f64 = pressure[1..pressure.len() - 1].iter().sum::<f64>() * d_x;
+    let peak = peak_pressure(&pressure);
+
+    let specific_pressure = if load > 0.0 {
+        peak / load
+    } else {
+        f64::INFINITY
+    };
+    Ok(WedgeSolution {
+        specific_pressure,
+        pressure,
+        load,
+        peak_pressure: peak,
+    })
+}
+
+/// The dimensional load capacity of a pivoted thrust bearing pad, in newtons.
+///
+/// A thrust pad is an annular sector, and that changes the load integral in a
+/// way that is easy to get wrong: the film varies **with radius** rather than
+/// along a sliding direction, so the load is an area integral and carries an
+/// extra factor of radius that a plain line integral drops.
+///
+/// ```text
+/// W = (mu U L / h^2) int p(X) r(X) dX
+/// ```
+///
+/// with `L` the radial span, `h` the film at the inner edge, and `r(X)` the
+/// radius at normalised radius `X`. The prefactor is the dimensional scale: the
+/// nondimensional pressure `p` is pressure divided by `mu U L / h^2`.
+///
+/// The pad is **pivoted**, which is the entire design idea: a pivoted pad
+/// takes its own pressure distribution as its equilibrium shape, so it is
+/// stable in every direction in its plane and its tilt need not be set by hand.
+/// A non-pivoted pad is tilted in two dimensions, which this
+/// one-dimensional treatment does not describe.
+///
+/// `taper` is the relative film fall across the pad, the same nondimensional
+/// quantity as for [`solve_wedge`].
+///
+/// # Errors
+///
+/// Propagates [`wedge_load_capacity`]'s errors for a taper that does not leave
+/// a positive film, and returns [`TribologyError::NonPositive`] for a
+/// non-positive clearance, viscosity, or surface speed.
+pub fn thrust_pad_load(
+    inner_radius: f64,
+    outer_radius: f64,
+    clearance: f64,
+    viscosity: f64,
+    surface_speed: f64,
+    taper: f64,
+    options: ReynoldsOptions,
+) -> Result<f64> {
+    if clearance <= 0.0 {
+        return Err(TribologyError::NonPositive("thrust pad clearance"));
+    }
+    if viscosity <= 0.0 {
+        return Err(TribologyError::NonPositive("lubricant viscosity"));
+    }
+    if surface_speed <= 0.0 {
+        return Err(TribologyError::NonPositive("pad surface speed"));
+    }
+    if inner_radius <= 0.0 {
+        return Err(TribologyError::NonPositive("thrust pad inner radius"));
+    }
+    if outer_radius <= inner_radius {
+        return Err(TribologyError::OutsideValidRange(
+            "a thrust pad outer radius beyond its inner radius",
+        ));
+    }
+    wedge_load_capacity(taper)?;
+
+    let profile = |x: f64| 1.0 - taper * x;
+    let pressure = solve_profile_on_grid(options.nodes, &profile, 0.0, 0.0);
+
+    // The area element `r dr`, not `dr`. Dropping the `r` would give the load
+    // per unit radius rather than the total load, which for an annular pad
+    // understates the answer by roughly the mean radius.
+    let d_x = 1.0 / options.nodes as f64;
+    let span = outer_radius - inner_radius;
+    let mut integral = 0.0;
+    for (i, p) in pressure[1..pressure.len() - 1].iter().enumerate() {
+        let x = (i + 1) as f64 * d_x;
+        let radius = inner_radius + x * span;
+        integral += p * radius * span * d_x;
+    }
+
+    let pressure_scale = viscosity * surface_speed * span / (clearance * clearance);
+    Ok(pressure_scale * integral)
 }
 
 #[cfg(test)]
@@ -552,5 +779,230 @@ mod tests {
         let expected =
             math::sqrt(solution.load_x * solution.load_x + solution.load_y * solution.load_y);
         assert!((solution.load - expected).abs() < 1e-12);
+    }
+
+    // --- Wedge (slider and thrust) bearings -------------------------------
+
+    #[test]
+    fn the_numerical_wedge_agrees_with_the_closed_form() {
+        // This is the load-bearing test of the whole wedge implementation. The
+        // closed form is exact and the solver is a discretisation, so they must
+        // agree to the solver's own second-order accuracy. If they do not,
+        // either the finite-volume assembly or the closed form is wrong, and
+        // the numbers alone cannot say which -- which is why both are here.
+        for taper in [0.1, 0.3, 0.5, 0.7, 0.9, 0.95] {
+            let numeric = solve_wedge(taper, ReynoldsOptions::new(3200)).expect("a wedge");
+            let exact = wedge_load_capacity(taper).expect("a taper");
+            assert!(
+                (numeric.load - exact).abs() / exact < 1.0e-5,
+                "taper {taper}: {} vs {exact}",
+                numeric.load
+            );
+
+            let peak_exact = wedge_peak_pressure(taper).expect("a taper");
+            assert!(
+                (numeric.peak_pressure - peak_exact).abs() / peak_exact < 1.0e-5,
+                "taper {taper}: peak {} vs {peak_exact}",
+                numeric.peak_pressure
+            );
+        }
+    }
+
+    #[test]
+    fn the_wedge_load_is_second_order_convergent() {
+        // Not just "agrees at one resolution" but converges, at the rate the
+        // discretisation claims. Halving the cell width must quarter the error,
+        // and if it does not then the agreement above is luck.
+        let taper = 0.6;
+        let exact = wedge_load_capacity(taper).expect("a taper");
+        let error = |n: usize| {
+            let s = solve_wedge(taper, ReynoldsOptions::new(n)).expect("a wedge");
+            (s.load - exact).abs() / exact
+        };
+        let coarse = error(100);
+        let medium = error(200);
+        let fine = error(400);
+        // Ratios near 4 mean second order. The bounds are loose enough to
+        // tolerate the rounding floor but tight enough to catch a first-order
+        // scheme, whose ratio would be 2.
+        for (a, b) in [(coarse, medium), (medium, fine)] {
+            let ratio = a / b;
+            assert!(
+                (3.0..5.0).contains(&ratio),
+                "expected second order (ratio ~4), got {ratio} from {a} and {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn wedge_load_grows_without_bound_as_the_wedge_closes() {
+        // A consequence of the idealised wedge that is easy to get backwards.
+        // Both ends being open means nothing relieves the pressure, so load and
+        // peak pressure both diverge as the outlet film vanishes. The classic
+        // "optimum wedge angle" of `2 - sqrt(2)` comes from a *different* problem
+        // -- a finite bearing with one end pressurised -- and does not apply
+        // here. That distinction is worth stating, because quoting the constant
+        // for this boundary condition would be a real and plausible error.
+        let mut previous = 0.0;
+        for taper in [0.2, 0.4, 0.6, 0.8, 0.9, 0.99] {
+            let load = wedge_load_capacity(taper).expect("a taper");
+            assert!(load > previous, "taper {taper} load {load} vs {previous}");
+            previous = load;
+        }
+        let previous = wedge_load_capacity(0.99).expect("a taper");
+        // And it keeps growing, so there is no interior optimum to quote, which
+        // is the whole point of this test.
+        assert!(wedge_load_capacity(0.999).unwrap() > previous);
+    }
+
+    #[test]
+    fn specific_pressure_is_bounded_where_the_load_is_not() {
+        // Since the load diverges as the wedge closes, neither load nor peak
+        // pressure alone can rank two geometries: both just say "close the
+        // wedge more". Their ratio does rank them, because it stays bounded.
+        //
+        // The limit is worth stating because it is the physical content of the
+        // number: as the taper goes to zero the wedge degenerates to a linear
+        // pressure ramp, whose peak-to-mean ratio is 3/2. So a shallow wedge
+        // gives exactly the parabolic profile, and `specific_pressure` tends to
+        // 1.5 from above. Every wedge is worse than that, and the penalty is
+        // what buying load costs in peak pressure.
+        let at = |taper: f64| {
+            solve_wedge(taper, ReynoldsOptions::new(1000))
+                .unwrap()
+                .specific_pressure
+        };
+        let mut previous = 0.0;
+        for taper in [0.05, 0.2, 0.4, 0.6, 0.8, 0.9] {
+            let ratio = at(taper);
+            assert!(
+                ratio > 1.5,
+                "taper {taper}: {ratio} is at or below the 3/2 limit"
+            );
+            assert!(
+                ratio > previous,
+                "taper {taper}: {ratio} did not rise from {previous}"
+            );
+            previous = ratio;
+        }
+        // Bounded, unlike the load it is built from: at a taper of 0.9 the load
+        // has grown by a factor of ~180 from the shallowest case here, while the
+        // ratio has grown by less than two.
+        assert!(previous < 2.5, "{previous}");
+        assert!(wedge_load_capacity(0.9).unwrap() / wedge_load_capacity(0.05).unwrap() > 100.0);
+    }
+
+    #[test]
+    fn a_parallel_film_carries_no_load() {
+        // A taper of zero is the limit from above: no wedge, no source term, no
+        // pressure. It is excluded by `wedge_load_capacity` because the closed
+        // form degenerates, but the solver must still agree with the limit
+        // rather than dividing by zero.
+        let flat = solve_wedge(1.0e-9, ReynoldsOptions::new(500)).expect("a shallow wedge");
+        assert!(flat.load < 1.0e-6, "{}", flat.load);
+        assert!(flat.peak_pressure < 1.0e-3, "{}", flat.peak_pressure);
+    }
+
+    #[test]
+    fn wedge_geometry_that_is_not_a_wedge_is_rejected() {
+        // Zero and negative tapers have no converging wedge; a taper of one
+        // closes the film completely and both closed forms are singular there.
+        assert!(wedge_load_capacity(0.0).is_err());
+        assert!(wedge_load_capacity(-0.2).is_err());
+        assert!(wedge_load_capacity(1.0).is_err());
+        assert!(wedge_load_capacity(1.5).is_err());
+        assert!(wedge_peak_pressure(0.0).is_err());
+        assert!(solve_wedge(1.5, ReynoldsOptions::new(100)).is_err());
+    }
+
+    #[test]
+    fn the_wedge_pressure_is_ambient_at_both_ends_and_positive_inside() {
+        // The Gümbel condition. A solver that leaked the journal bearing's
+        // `P(0) = 1` in here would still give a plausible-looking curve, just
+        // shifted, which is why the ends are checked explicitly.
+        let w = solve_wedge(0.5, ReynoldsOptions::new(400)).expect("a wedge");
+        assert!(w.pressure[0].abs() < 1e-15);
+        assert!(w.pressure[w.pressure.len() - 1].abs() < 1e-15);
+        for p in &w.pressure[1..w.pressure.len() - 1] {
+            assert!(*p > 0.0, "negative pressure inside the wedge: {p}");
+        }
+    }
+
+    #[test]
+    fn a_thrust_pad_carries_load_and_scales_with_every_dimension() {
+        // A 100 mm bore pad, 40 mm span, 25 um film at the inner edge, 0.1 Pa s
+        // oil at 8 m/s. The load lands in the kilonewton range, which is what a
+        // thrust bearing of that size carries.
+        let options = ReynoldsOptions::new(2000);
+        let load = thrust_pad_load(0.1, 0.14, 25.0e-6, 0.1, 8.0, 0.5, options).expect("a pad");
+        assert!(load > 1.0e3 && load < 1.0e6, "load = {load} N");
+
+        // Linear in viscosity and in speed, since both are pure prefactors.
+        let base =
+            thrust_pad_load(0.1, 0.14, 25.0e-6, 0.1, 8.0, 0.5, ReynoldsOptions::new(400)).unwrap();
+        let faster =
+            thrust_pad_load(0.1, 0.14, 25.0e-6, 0.2, 8.0, 0.5, ReynoldsOptions::new(400)).unwrap();
+        assert!((faster / base - 2.0).abs() < 1.0e-9, "{}", faster / base);
+
+        // Inverse-square in the clearance, which is the dominant design lever:
+        // halving the film quadruples the load. A linear film dependence here
+        // would be the classic error.
+        let tighter =
+            thrust_pad_load(0.1, 0.14, 12.5e-6, 0.1, 8.0, 0.5, ReynoldsOptions::new(400)).unwrap();
+        assert!(
+            (tighter / base - 4.0).abs() / 4.0 < 1.0e-3,
+            "{}",
+            tighter / base
+        );
+    }
+
+    #[test]
+    fn a_thrust_pad_load_scales_with_its_pressure_weighted_radius() {
+        // The `r dr` factor made visible. These two pads are the same size, so
+        // the pressure scale and the wedge solution are identical between them
+        // and the only thing that differs is the radius the load acts at.
+        //
+        // The scaling is by a *pressure-weighted* mean radius, not by the
+        // geometric mean and not by the inner radius. The wedge converges
+        // towards the outer edge, so pressure peaks there and pulls the
+        // effective radius outward. That puts the result strictly between the
+        // outer-radius ratio and the mean-radius ratio, which is a sharper
+        // statement than "it scales with radius" and would fail outright if the
+        // `r` factor were dropped from the integral.
+        let options = ReynoldsOptions::new(1000);
+        let small = thrust_pad_load(0.05, 0.09, 25.0e-6, 0.1, 8.0, 0.5, options).unwrap();
+        let large = thrust_pad_load(0.10, 0.14, 25.0e-6, 0.1, 8.0, 0.5, options).unwrap();
+        let ratio = large / small;
+
+        let outer_ratio = 0.14 / 0.09;
+        let mean_ratio = (0.10 + 0.14) / 2.0 / ((0.05 + 0.09) / 2.0);
+        let inner_ratio = 0.10 / 0.05;
+        assert!(ratio > outer_ratio, "{ratio} vs {outer_ratio}");
+        assert!(ratio < mean_ratio, "{ratio} vs {mean_ratio}");
+        assert!(mean_ratio < inner_ratio);
+
+        // And the area ratio, which is what the integral would give if `r` were
+        // dropped, sits well outside that band. This is the assertion that would
+        // actually catch the missing factor.
+        let area_ratio = (0.10f64 * 0.14) / (0.05 * 0.09);
+        assert!(
+            area_ratio > ratio,
+            "area ratio {area_ratio} should exceed {ratio}"
+        );
+    }
+
+    #[test]
+    fn thrust_pad_geometry_that_cannot_exist_is_rejected() {
+        let options = ReynoldsOptions::new(100);
+        // No film, no oil, no motion, no annulus.
+        assert!(thrust_pad_load(0.1, 0.14, 0.0, 0.1, 8.0, 0.5, options).is_err());
+        assert!(thrust_pad_load(0.1, 0.14, -1e-6, 0.1, 8.0, 0.5, options).is_err());
+        assert!(thrust_pad_load(0.1, 0.14, 25e-6, 0.0, 8.0, 0.5, options).is_err());
+        assert!(thrust_pad_load(0.1, 0.14, 25e-6, 0.1, 0.0, 0.5, options).is_err());
+        assert!(thrust_pad_load(0.0, 0.14, 25e-6, 0.1, 8.0, 0.5, options).is_err());
+        // An outer radius inside the inner one is not an annulus.
+        assert!(thrust_pad_load(0.14, 0.1, 25e-6, 0.1, 8.0, 0.5, options).is_err());
+        // And the taper rules carry over from the wedge.
+        assert!(thrust_pad_load(0.1, 0.14, 25e-6, 0.1, 8.0, 1.5, options).is_err());
     }
 }

@@ -10,20 +10,28 @@
 //! - [`lubrication`]: the Stribeck curve, Petroff's hydrodynamic friction, the
 //!   Sommerfeld number, the Reynolds lubrication criterion, and the
 //!   hydrodynamic journal-bearing solution.
-//! - [`wear`]: Archard's linear wear law and the wear coefficient, with the
-//!   usual honesty about when Archard is and is not applicable.
-//!
+//! - [`reynolds`]: the full-film Reynolds solver for journal, slider, and pivoted
+//!   thrust geometries, with an exact closed form for the wedge so the
+//!   discretisation can be checked against it.
+//! - [`friction`]: Coulomb, Stribeck, and LuGre dynamic friction, for multibody
+//!   joint integration.
 //! - [`wear`]: Archard's wear law and its inversion, the lambda ratio that
-//!   decides whether a film separates two surfaces, and frictional heating
-//!   with the validity limit of the quasi-steady temperature rise.
+//!   decides whether a film separates two surfaces, running-in wear, and
+//!   frictional heating with the validity limit of the quasi-steady temperature
+//!   rise.
+//! - [`differentiable`]: the wedge load-capacity integrals over forward-mode
+//!   dual numbers, so a gradient-based optimiser gets `dW/dtaper` exactly
+//!   instead of by finite differences.
 //!
-//! Status: `contact`, `lubrication`, and `wear` are implemented and tested.
-//! Still to come: a transient flash-temperature solution and a
-//! mixed-lubrication friction model.
+//! Status: all six modules are implemented and tested. Still to come: a
+//! transient flash-temperature solution, a mixed-lubrication friction model,
+//! and EHL coupling with elastic deformation (which needs
+//! `tpt-fem-elasticity`, an external crate not in this workspace).
 
 extern crate alloc;
 
 pub mod contact;
+pub mod differentiable;
 pub mod error;
 pub mod friction;
 pub mod lubrication;

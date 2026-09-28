@@ -106,6 +106,32 @@ pub fn head_gain(link: &crate::network::Link, flow: f64) -> f64 {
     }
 }
 
+/// The flow correction that closes a single loop, in cubic metres per second.
+///
+/// ```text
+/// dQ = -dh / (sum_i s_i r_i)
+/// ```
+///
+/// Exposed on its own, and used by the solver, because it is the step whose
+/// behaviour decides whether the iteration converges. Factoring it out means
+/// the property that matters, that the correction always acts *against* the
+/// imbalance, is a statement about one small function that can be proved
+/// directly rather than inferred from a whole solve.
+///
+/// For a purely resistive loop the signed resistance is positive, and
+/// `dQ * dh = -dh^2 / R` is then non-positive, so the correction always reduces
+/// the magnitude of the imbalance it is correcting and can never overshoot to
+/// the far side. That is what makes the sweep convergent rather than
+/// oscillatory.
+///
+/// Note this is a statement about *direction* only. How far the correction gets
+/// is a separate question, and it is the one Hardy Cross is slow at: the head
+/// loss is quadratic in flow, so `dh` is not linear in `dQ` and this is a
+/// fixed-point step rather than a Newton step.
+pub fn loop_correction(imbalance: f64, signed_resistance: f64) -> f64 {
+    -imbalance / signed_resistance
+}
+
 /// Solves the network for flows and heads by loop correction.
 pub fn hardy_cross(network: &Network, options: HardyCrossOptions) -> Result<HardyCrossResult> {
     network.validate()?;
@@ -157,7 +183,7 @@ pub fn hardy_cross(network: &Network, options: HardyCrossOptions) -> Result<Hard
                 continue;
             }
 
-            let delta = -imbalance / resistance;
+            let delta = loop_correction(imbalance, resistance);
             for term in lp.terms() {
                 let sign = if term.forward { 1.0 } else { -1.0 };
                 flows[term.link.0] += sign * delta;
@@ -405,6 +431,69 @@ pub fn continuity_error(network: &Network, flows: &[f64]) -> f64 {
 mod tests {
     use super::*;
     use crate::network::{Link, Node};
+
+    /// The property the Kani harness `hardy_cross_correction_never_amplifies`
+    /// proves, checked here too.
+    ///
+    /// The proof harness is behind `cfg(kani)` and cannot run until Kani is
+    /// installed on this machine, so asserting the same thing on a sweep of
+    /// real inputs keeps it honest in the meantime. A test that says "this
+    /// would be proved" is not evidence, and the only thing worse than no
+    /// verification is documentation that implies some.
+    #[test]
+    fn a_resistive_correction_never_amplifies_its_own_imbalance() {
+        for resistance in [1.0e-6, 0.1, 1.0, 1.0e3, 1.0e9] {
+            for imbalance in [-1.0e8, -12.5, -1.0, -1.0e-8, 0.0, 1.0e-8, 1.0, 12.5, 1.0e8] {
+                let delta = loop_correction(imbalance, resistance);
+                assert!(
+                    delta.is_finite(),
+                    "R={resistance} dh={imbalance} -> {delta}"
+                );
+                assert!(
+                    delta * imbalance <= 0.0,
+                    "R={resistance} dh={imbalance} -> {delta} amplifies"
+                );
+                if imbalance != 0.0 {
+                    assert!(
+                        delta != 0.0,
+                        "a non-zero imbalance must produce a correction"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The scaling companion to the property above: more imbalance demands more
+    /// correction, and a stiffer loop demands less. Both must hold for the same
+    /// sign reasons.
+    #[test]
+    fn the_correction_scales_the_right_way_round() {
+        let base = loop_correction(4.0, 2.0);
+        // More imbalance, same loop: a bigger correction.
+        assert!(loop_correction(8.0, 2.0) < base);
+        // Same imbalance, stiffer loop: a smaller correction.
+        assert!(loop_correction(4.0, 4.0) > base);
+        // And the magnitude is exactly `|dh| / R`, which is the definition.
+        assert!((base - -2.0).abs() < 1e-15);
+    }
+
+    /// A loop whose signed resistance is negative is one where the links add
+    /// head faster than they dissipate. The correction then runs *with* the
+    /// imbalance, which is why the solver skips such loops rather than trusting
+    /// the direction argument above. This test pins the case so the direction
+    /// guarantee is never quoted without its precondition.
+    #[test]
+    fn a_head_adding_loop_is_the_precondition_the_guarantee_needs() {
+        let head_adding = loop_correction(2.0, -1.0);
+        assert!(
+            head_adding > 0.0,
+            "a negative-resistance loop inverts the sign"
+        );
+        assert!(
+            head_adding * 2.0 > 0.0,
+            "which is exactly why the solver requires a resistive loop"
+        );
+    }
 
     /// Two reservoirs joined by one pipe, no demand: flow must be exactly zero.
     #[test]
