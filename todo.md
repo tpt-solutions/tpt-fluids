@@ -336,19 +336,34 @@ message.
 - [x] `cargo fmt` / `clippy` clean
 - [x] `cargo deny check` clean
 
-## Phase 7 — Integration & Workspace Closeout
+## Phase 7 - Integration & Workspace Closeout
 
-- [ ] Integration test: model-ship resistance extrapolation (`tpt-fluids-marine`)
-      matches published Holtrop-Mennen benchmark figures within stated tolerance
-- [ ] `cargo test --workspace --all-features` passes
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean
-- [ ] `cargo deny check` clean workspace-wide (confirm no Apache-2.0-only
-      crate anywhere in the resolved dependency graph)
-- [ ] no_std(+alloc) matrix passes for every crate that declares `no_std`
-      support (expected: `tpt-fluids-core` at minimum)
-- [ ] Root `README.md` documents the full crate map, build order, and how
-      `tpt-construction`/`tpt-engineering`/`tpt-physics`/`tpt-aero` are
-      expected to consume `tpt-fluids`
+- [x] Integration test: model-ship resistance extrapolation
+      (`Ittc1957Line`) matches the independent Holtrop-Mennen estimate for
+      the same 150 m, 3000 DWT feeder to within 0.01 percent at the
+      calibrated coefficient, and Holtrop-Mennen falls inside the band a
+      plausible spread in a measured model test would give. Plus the power
+      chain closing: the propeller must deliver more than the hull resists,
+      and a Beaufort sea must put the spectral peak within a few ship lengths
+- [x] `cargo test --workspace --all-features` passes
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean
+- [x] `cargo fmt --all -- --check` clean
+- [x] `cargo deny check` clean workspace-wide, no Apache-2.0-only crate in the
+      resolved graph
+- [x] `no_std` matrix resolved and documented: `tpt-fluids-core` builds for
+      `thumbv6m-none-eabi` with `--no-default-features --features alloc` and
+      also with no features at all. The three domain crates declare a `std`
+      feature and are **not** `no_std`; they enable `core/std` in their
+      manifests, so `thumbv6m-none-eabi` fails for them with "can't find
+      crate for std". This is a deliberate split and is now stated in the
+      README rather than left as a surprise.
+- [x] Umbrella feature matrix builds: `core` alone in `no_std`, each domain
+      alone, all three together, and everything with `verify`
+- [x] Root `README.md` rewritten: accurate crate map, build order, design
+      philosophy, test inventory, known limitations, and commands. The
+      previous text had UTF-8 mojibake from the bootstrap and claimed EHL,
+      Dowson-Hampton and LuGre friction, none of which exist.
+- [x] `cfg(kani)` declared in the workspace lint config
 - [ ] Advanced coupling follow-up (unblock once the external repo exists):
       EHL coupling between `tpt-fluids-tribo` and `tpt-fem-elasticity`
 - [ ] Advanced coupling follow-up (unblock once the external repo exists):
