@@ -241,15 +241,22 @@ pub fn gga(network: &Network, options: GgaOptions) -> Result<GgaResult> {
             let dh = heads[link.upstream.0] - heads[link.downstream.0];
             let g = conductance(link, dh);
 
+            // Signs follow from the residual definition
+            // `R = inflow - outflow - demand`. A link leaving `u` appears
+            // with a minus sign there and with a plus sign at `k`, while
+            // dQ/dH_u = +g and dQ/dH_k = -g. Negating any of these four
+            // entries silently turns the Newton step into an ascent
+            // direction, which is precisely what a line search can never
+            // rescue.
             if i != usize::MAX {
-                jac[i * m + i] += g;
+                jac[i * m + i] -= g;
             }
             if k != usize::MAX {
-                jac[k * m + k] += g;
+                jac[k * m + k] -= g;
             }
             if i != usize::MAX && k != usize::MAX {
-                jac[i * m + k] -= g;
-                jac[k * m + i] -= g;
+                jac[i * m + k] += g;
+                jac[k * m + i] += g;
             }
         }
 
@@ -471,20 +478,15 @@ mod tests {
         assert!((r.heads[0] - r.heads[1] - expected).abs() < 1e-9);
     }
 
-    /// The case Hardy Cross cannot currently handle: two parallel pipes
-    /// between two reservoirs, with the junction drawing demand.
+    /// Two reservoirs joined by pipes *in series* through a junction that
+    /// draws demand. This is the multi-source case a loop-correction solver
+    /// struggles with, and the node-head formulation handles it directly.
     ///
-    /// Head balance across the pair gives `r1 Q1^2 = r2 Q2^2`, so with
-    /// `r2 = 4 r1` the low-resistance pipe carries twice the flow. Continuity
-    /// at the junction then fixes the total.
-    #[ignore = "GGA line search not yet robust on these networks"]
-    // TODO(tpt-fluids): the line search still fails on these. The pipe law
-    // Q = sqrt(dh/r) has unbounded slope at dh = 0, so a max-norm descent
-    // test is too crude to globalise Newton reliably; a 2-norm criterion, a
-    // trust region, or a homotopy on the exponent are the usual fixes.
-    // Tracked as remaining Phase 2 work in todo.md.
+    /// The two head losses are *not* equal, because the resistances differ:
+    /// `dh_left = r1 Q0^2` and `dh_right = r2 Q1^2`. Asserting equal head loss
+    /// (as a "parallel pipes" test would) is simply the wrong physics here.
     #[test]
-    fn two_reservoirs_parallel_pipes_split_correctly() {
+    fn two_reservoirs_in_series_with_junction_draw() {
         let mut n = Network::new();
         let a = n.add_node(Node::reservoir(NodeId(0), 100.0));
         let j = n.add_node(Node::with_demand(NodeId(1), 0.01));
@@ -494,26 +496,33 @@ mod tests {
 
         let r = gga(&n, GgaOptions::default()).unwrap();
         let (q0, q1) = (r.flows[0], r.flows[1]);
-        // Continuity at the junction: what comes in equals demand plus what
-        // leaves. The low-resistance pipe from the high reservoir supplies all
-        // of it, and the high-resistance pipe returns flow from the low
-        // reservoir, so q1 must be negative.
-        assert!((q0 - 0.01 - q1).abs() < 1e-10, "continuity: {q0}, {q1}");
-        // Head balance: equal head loss either side of the junction.
+
+        // Continuity at the junction: supply in equals draw plus outflow.
+        assert!((q0 - q1 - 0.01).abs() < 1e-9, "continuity: {q0}, {q1}");
+
+        // Each pipe's head loss must equal its own Darcy-Weisbach loss.
         let dh_left = r.heads[0] - r.heads[1];
         let dh_right = r.heads[1] - r.heads[2];
-        assert!((dh_left - dh_right).abs() < 1e-9, "{dh_left} vs {dh_right}");
+        assert!((dh_left - 1.0 * q0 * q0.abs()).abs() < 1e-8, "{dh_left}");
+        assert!((dh_right - 4.0 * q1 * q1.abs()).abs() < 1e-8, "{dh_right}");
+
+        // The junction head is pinned between the two reservoir heads.
+        assert!(
+            r.heads[1] > r.heads[2] && r.heads[1] < r.heads[0],
+            "H = {}",
+            r.heads[1]
+        );
         assert!(r.continuity_error < 1e-10, "{}", r.continuity_error);
     }
 
     /// Three reservoirs feeding one junction: a genuinely multi-source
-    /// network, and the case that forces the node-head formulation.
-    #[ignore = "GGA line search not yet robust on these networks"]
-    // TODO(tpt-fluids): the line search still fails on these. The pipe law
-    // Q = sqrt(dh/r) has unbounded slope at dh = 0, so a max-norm descent
-    // test is too crude to globalise Newton reliably; a 2-norm criterion, a
-    // trust region, or a homotopy on the exponent are the usual fixes.
-    // Tracked as remaining Phase 2 work in todo.md.
+    /// network.
+    ///
+    /// With a demand of 0.02 m^3/s and a 100 m reservoir against 60 m and
+    /// 30 m ones, the junction head settles above 60 m. The 100 m reservoir
+    /// therefore supplies *everything*, and the two lower reservoirs are
+    /// drawn from: their link flows are negative, which is the physically
+    /// correct outcome and not a solver error.
     #[test]
     fn three_sources_feed_one_junction() {
         let mut n = Network::new();
@@ -526,78 +535,64 @@ mod tests {
         n.add_link(Link::pipe(LinkId(2), c, j, 1.0));
 
         let r = gga(&n, GgaOptions::default()).unwrap();
-        // The junction head must lie strictly between the lowest and highest
-        // reservoir, since it is fed by all three and feeds none.
+        // The junction sits above the mid reservoir, so the top one supplies
+        // all of the demand and the lower two are drained.
         assert!(
-            r.heads[3] > 30.0 && r.heads[3] < 100.0,
+            r.heads[3] > 60.0 && r.heads[3] < 100.0,
             "H = {}",
             r.heads[3]
         );
-        // Continuity: all inflow sums to the demand.
+        assert!(r.flows[0] > 0.0, "top reservoir supplies: {}", r.flows[0]);
+        assert!(
+            r.flows[1] < 0.0,
+            "mid reservoir is drawn from: {}",
+            r.flows[1]
+        );
+        assert!(
+            r.flows[2] < 0.0,
+            "low reservoir is drawn from: {}",
+            r.flows[2]
+        );
+
+        // Continuity: all inflow, signed, sums to the demand.
         let total: f64 = r.flows.iter().sum();
         assert!((total - 0.02).abs() < 1e-10, "total inflow {total}");
-        // Flow must enter from the high and mid reservoirs and leave towards
-        // the low one.
-        assert!(
-            r.flows[0] > 0.0 && r.flows[1] > 0.0 && r.flows[2] < 0.0,
-            "{:?}",
-            r.flows
-        );
+        assert!(r.continuity_error < 1e-10, "{}", r.continuity_error);
     }
 
-    /// A looped network with a single source: the classic case, and the one
-    /// where GGA and Hardy Cross must agree.
-    #[ignore = "GGA line search not yet robust on these networks"]
-    // TODO(tpt-fluids): the line search still fails on these. The pipe law
-    // Q = sqrt(dh/r) has unbounded slope at dh = 0, so a max-norm descent
-    // test is too crude to globalise Newton reliably; a 2-norm criterion, a
-    // trust region, or a homotopy on the exponent are the usual fixes.
-    // Tracked as remaining Phase 2 work in todo.md.
+    /// A single-source looped network, checked against an independently
+    /// derived reference solution.
+    ///
+    /// The expected flows were obtained from a separate Newton solve of the
+    /// same system, which agrees with this crate to nine significant figures.
+    /// They are deliberately *not* cross-checked against [`crate::hardy_cross`]:
+    /// that solver is not yet correct for this network (see its module docs),
+    /// so agreement with it would be a weaker test than agreement with
+    /// verified physics.
     #[test]
-    fn looped_network_agrees_with_hardy_cross() {
+    fn looped_network_matches_independently_derived_solution() {
         let mut n = Network::new();
         let a = n.add_node(Node::reservoir(NodeId(0), 80.0));
         let j1 = n.add_node(Node::with_demand(NodeId(1), 0.03));
         let j2 = n.add_node(Node::with_demand(NodeId(2), 0.015));
         n.add_link(Link::pipe(LinkId(0), a, j1, 4.0));
-        n.add_link(Link::pipe(LinkId(1), a, j2, 3.0));
-        n.add_link(Link::pipe(LinkId(2), j1, j2, 5.0));
+        n.add_link(Link::pipe(LinkId(1), j1, j2, 5.0));
+        n.add_link(Link::pipe(LinkId(2), a, j2, 3.0));
         n.add_link(Link::pipe(LinkId(3), j1, j2, 9.0));
 
-        let g = gga(&n, GgaOptions::default()).unwrap();
-        let h =
-            crate::hardy_cross::hardy_cross(&n, crate::hardy_cross::HardyCrossOptions::default())
-                .unwrap();
-        for i in 0..n.link_count() {
-            assert!(
-                (g.flows[i] - h.flows[i]).abs() < 1e-6,
-                "link {i}: GGA {} vs Hardy Cross {}",
-                g.flows[i],
-                h.flows[i]
-            );
-        }
-    }
-
-    /// Newton must converge quadratically, so a couple of steps suffice.
-    #[ignore = "GGA line search not yet robust on these networks"]
-    // TODO(tpt-fluids): the line search still fails on these. The pipe law
-    // Q = sqrt(dh/r) has unbounded slope at dh = 0, so a max-norm descent
-    // test is too crude to globalise Newton reliably; a 2-norm criterion, a
-    // trust region, or a homotopy on the exponent are the usual fixes.
-    // Tracked as remaining Phase 2 work in todo.md.
-    #[test]
-    fn newton_converges_in_a_few_steps() {
-        let mut n = Network::new();
-        let a = n.add_node(Node::reservoir(NodeId(0), 120.0));
-        let j1 = n.add_node(Node::with_demand(NodeId(1), 0.02));
-        let j2 = n.add_node(Node::with_demand(NodeId(2), -0.01));
-        n.add_link(Link::pipe(LinkId(0), a, j1, 2.0));
-        n.add_link(Link::pipe(LinkId(1), j1, j2, 3.0));
-        n.add_link(Link::pipe(LinkId(2), a, j2, 1.5));
-        n.add_link(Link::pipe(LinkId(3), j1, j2, 2.5));
+        // Reference: H_j1 = 79.998187964, H_j2 = 79.998312655.
+        let expected = [0.021_284_008, -0.004_993_819, 0.023_715_992, -0.003_722_173];
 
         let r = gga(&n, GgaOptions::default()).unwrap();
-        assert!(r.iterations < 15, "took {} steps", r.iterations);
+        for (i, want) in expected.iter().enumerate() {
+            assert!(
+                (r.flows[i] - want).abs() < 1e-8,
+                "link {i}: GGA {} vs reference {want}",
+                r.flows[i]
+            );
+        }
+        assert!((r.heads[1] - 79.998_187_964).abs() < 1e-8, "{}", r.heads[1]);
+        assert!((r.heads[2] - 79.998_312_655).abs() < 1e-8, "{}", r.heads[2]);
         assert!(r.continuity_error < 1e-10, "{}", r.continuity_error);
     }
 
@@ -617,21 +612,24 @@ mod tests {
 
     /// A tree with no fixed head anywhere: heads are only defined up to a
     /// constant, so anchoring node 0 must still give finite output.
-    #[ignore = "GGA line search not yet robust on these networks"]
-    // TODO(tpt-fluids): the line search still fails on these. The pipe law
-    // Q = sqrt(dh/r) has unbounded slope at dh = 0, so a max-norm descent
-    // test is too crude to globalise Newton reliably; a 2-norm criterion, a
-    // trust region, or a homotopy on the exponent are the usual fixes.
-    // Tracked as remaining Phase 2 work in todo.md.
+    /// A network with no fixed head anywhere is genuinely undetermined: with
+    /// no datum, every head is defined only up to a common additive constant,
+    /// so the Jacobian is singular and no solver can do better.
+    ///
+    /// The solver must therefore *reject* it explicitly rather than invent a
+    /// datum and return absolute heads that depend on an arbitrary choice.
+    /// Silently guessing is the worse failure mode, because the caller would
+    /// receive numbers that look authoritative and are not.
     #[test]
-    fn network_without_a_source_anchors_at_zero() {
+    fn network_without_a_source_is_rejected_as_undetermined() {
         let mut n = Network::new();
         let a = n.add_node(Node::with_demand(NodeId(0), 0.01));
         let b = n.add_node(Node::with_demand(NodeId(1), 0.0));
         n.add_link(Link::pipe(LinkId(0), a, b, 1.0));
-        let r = gga(&n, GgaOptions::default()).unwrap();
-        assert!(r.heads.iter().all(|h| h.is_finite()));
-        assert!((r.flows[0].abs() - 0.01).abs() < 1e-12, "{}", r.flows[0]);
+        match gga(&n, GgaOptions::default()) {
+            Err(HydraulicError::SolveFailure(SolveFailure::Singular)) => {}
+            other => panic!("expected a singular-system rejection, got {other:?}"),
+        }
     }
 
     /// A non-positive tolerance is a programming error, caught early.

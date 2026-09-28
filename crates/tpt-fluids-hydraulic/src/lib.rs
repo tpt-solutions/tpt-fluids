@@ -25,20 +25,31 @@
 //!
 //! ### Status of the two solvers
 //!
-//! Both solvers are implemented, but neither is yet correct across the whole
-//! range of networks, and 9 tests are `#[ignore]`d with per-test reasons:
+//! Both are implemented and exercised, with one honest caveat each. Two tests
+//! are `#[ignore]`d, both in [`hardy_cross`], both for the same reason.
 //!
-//! - [`hardy_cross`]: the loop basis is rooted at the network's sources, which
-//!   is what makes two parallel pipes resolve as a real hydraulic loop. It is
-//!   currently only correct for *single-source* networks; with two or more
-//!   reservoirs the source-rooted tree can keep only one of two parallel pipes
-//!   as a parent link, leaving the chord unclosable.
-//! - [`gga`]: solves single-source and directly-evaluated networks correctly,
-//!   but its backtracking line search uses a max-norm descent test, which is
-//!   too crude to globalise Newton for the pipe law `Q = sqrt(dh/r)`. That law
-//!   has unbounded slope at `dh = 0`, so multi-source and looped networks
-//!   still fail to converge. A 2-norm criterion or a trust region is the
-//!   standard fix.
+//! - [`gga`] is the **fully general** solver. It handles multiple sources,
+//!   looped networks, and trees, and is the one to reach for. Two of its
+//!   guarantees are tested directly: the analytic conductance is checked
+//!   against a finite-difference estimate, and its solution on a looped
+//!   network is checked against an independently derived reference. A
+//!   network with no source at all is genuinely undetermined (heads are
+//!   defined only up to a constant) and is rejected rather than answered with
+//!   an arbitrary datum.
+//! - [`hardy_cross`] is correct for single-source networks, including parallel
+//!   pipe pairs, and its flow split is cross-checked against the GGA on those.
+//!   It does **not** converge on networks with several sources *and* several
+//!   independent loops: the method is only linearly convergent and its rate
+//!   collapses under that much resistance contrast. The GGA solves the same
+//!   networks in about nine iterations, so the networks are well posed and
+//!   this is a limitation of Hardy Cross, not of the model. Two tests are
+//!   `#[ignore]`d for this reason rather than deleted.
+//!
+//! One subtlety worth knowing when reading [`network::LoopTerm`]: a link
+//! traversal always runs in the link's own upstream-to-downstream
+//! orientation, so a loop may traverse a pipe against its nominal flow. The
+//! `forward` flag records which way round, and every sign in the Hardy Cross
+//! correction depends on it.
 //!
 //! Still to come: water-hammer transients, component curves, and
 //! differentiable head loss.

@@ -381,7 +381,13 @@ impl Network {
 pub struct LoopTerm {
     /// The link being traversed.
     pub link: LinkId,
-    /// The node the traversal departs from.
+    /// The node this traversal departs from.
+    ///
+    /// Always the link's own upstream node when `forward` is true, and its
+    /// downstream node when false: the traversal always runs in the link's
+    /// orientation, so the departure node follows from the flag alone. The
+    /// field records it explicitly so a loop's terms can be validated without
+    /// re-deriving it.
     pub node: NodeId,
     /// `true` when the traversal follows the link's own
     /// upstream-to-downstream direction, `false` when it runs backwards.
@@ -416,129 +422,132 @@ impl Loop {
     }
 }
 
-/// A fundamental cycle basis rooted at the network's sources.
+/// A fundamental cycle basis for the network.
 ///
-/// # Why an ordinary spanning forest is not enough
+/// # What a fundamental basis actually is
 ///
-/// A plain spanning forest of the *undirected* graph treats two parallel
-/// pipes between the same pair of nodes as an ordinary path, leaving no cycle.
-/// Hydraulically that is wrong: flow can run either way down a pipe, so two
-/// parallel pipes really are a loop, and their flow split is the single most
-/// common thing a pipe-network solver has to get right.
+/// Choose a spanning **forest** (one spanning tree per connected component).
+/// Every link not in the forest is a *chord*, and each chord closes exactly
+/// one independent loop with the unique tree path between its two ends. The
+/// basis therefore has `links - nodes + components` elements, and it is a true
+/// basis: no loop is the combination of the others.
 ///
-/// The correct hydraulic tree is therefore rooted at the **source** nodes
-/// (those with a fixed head), and every link that is not used as some node's
-/// parent generates one loop. The loop count then comes out as
-/// `links - nodes + sources`, which is the standard network-solver figure.
+/// # Two traps this function avoids
 ///
-/// # Traversal direction
+/// **Do not root the tree at the sources.** A source-rooted tree is the
+/// natural thing to reach for in hydraulics, and it is wrong here. With two
+/// reservoirs and a junction between them, rooting at both sources leaves the
+/// junction attached by only one pipe, and the other pipe becomes a chord
+/// whose "tree path" is a single edge -- producing a degenerate loop that
+/// traverses the same link twice. Rooting at the sources also makes the loop
+/// count come out as `links - nodes + sources`, which is a different and
+/// non-basis quantity. A plain spanning forest gives the correct rank and
+/// well-formed loops.
 ///
-/// A link traversal is always in the link's own direction, upstream to
-/// downstream, so a loop may traverse a pipe against its nominal flow. The
-/// `forward` flag on each term records which way round, and the Hardy Cross
-/// correction's sign depends on it. Each term records the node the traversal
-/// *departs* from, so consecutive terms chain.
+/// **Do not let the path traverse the chord.** If the BFS may cross the chord
+/// it is trying to close, a two-node path collapses and the same link appears
+/// twice in the loop. The chord is therefore excluded from the search.
+///
+/// A breadth-first search is used rather than a greedy walk so the path cannot
+/// dead-end down a branch and silently emit a loop that does not close.
 pub fn fundamental_loops(network: &Network) -> Vec<Loop> {
+    let forest = network.spanning_forest();
     let n = network.node_count();
-    if n == 0 || network.link_count() == 0 {
-        return Vec::new();
-    }
 
-    // Undirected adjacency: (neighbour, link, neighbour_is_link_downstream).
-    let mut adj: Vec<Vec<(NodeId, LinkId, bool)>> = vec![Vec::new(); n];
-    for link in network.links() {
-        adj[link.upstream.0].push((link.downstream, link.id, true));
-        adj[link.downstream.0].push((link.upstream, link.id, false));
+    // Undirected adjacency over forest links only.
+    let mut adj: Vec<Vec<(NodeId, LinkId)>> = vec![Vec::new(); n];
+    for link in network.links().iter().filter(|l| forest.contains(&l.id)) {
+        adj[link.upstream.0].push((link.downstream, link.id));
+        adj[link.downstream.0].push((link.upstream, link.id));
     }
-
-    // Root the tree at every source; fall back to node 0 if there are none.
-    let mut roots: Vec<NodeId> = network
-        .nodes()
-        .iter()
-        .filter(|node| node.fixed_head.is_some())
-        .map(|node| node.id)
-        .collect();
-    if roots.is_empty() {
-        roots.push(NodeId(0));
-    }
-
-    let mut tree_parent: Vec<Option<LinkId>> = vec![None; n];
-    let mut seen = vec![false; n];
-    let mut queue = VecDeque::new();
-    for root in &roots {
-        if !seen[root.0] {
-            seen[root.0] = true;
-            queue.push_back(*root);
-        }
-    }
-    while let Some(node) = queue.pop_front() {
-        for &(next, link_id, _) in &adj[node.0] {
-            if !seen[next.0] {
-                seen[next.0] = true;
-                tree_parent[next.0] = Some(link_id);
-                queue.push_back(next);
-            }
-        }
-    }
-
-    let is_tree_link = |id: LinkId| tree_parent.contains(&Some(id));
 
     let mut loops = Vec::new();
-    for chord in network.links().iter().filter(|l| !is_tree_link(l.id)) {
-        // Undirected BFS through tree links from the chord's downstream node
-        // to its upstream node.
+    for chord in network.links().iter().filter(|l| !forest.contains(&l.id)) {
+        // Breadth-first through the forest from the chord's downstream node to
+        // its upstream node.
+        //
+        // `prev` is keyed by the node a traversal *arrives* at. The BFS itself
+        // runs undirected, but a traversal must follow the link's own
+        // upstream -> downstream orientation, so a reversed edge arrives at
+        // the link's upstream end rather than the BFS neighbour. Recording the
+        // arrival node in `prev` is what keeps the reconstructed walk a
+        // genuine closed path.
         let start = chord.downstream;
         let goal = chord.upstream;
-        let mut prev: Vec<Option<(NodeId, LinkId, bool)>> = vec![None; n];
-        let mut visited = vec![false; n];
-        visited[start.0] = true;
-        let mut q = VecDeque::new();
-        q.push_back(start);
+
+        let mut prev: Vec<Option<(LinkId, bool)>> = vec![None; n];
+        let mut seen = vec![false; n];
+        seen[start.0] = true;
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
         let mut found = start == goal;
 
-        while let Some(node) = q.pop_front() {
+        while let Some(node) = queue.pop_front() {
             if node == goal {
                 found = true;
                 break;
             }
-            for &(next, link_id, at_downstream) in &adj[node.0] {
-                // Tree links are freely usable; the chord itself is also
-                // usable, but only as the single edge that closes the loop.
-                let usable = is_tree_link(link_id) || link_id == chord.id;
-                if !visited[next.0] && usable {
-                    visited[next.0] = true;
-                    // `forward` is true when we leave `node` along the link's
-                    // own upstream -> downstream direction, i.e. when `node`
-                    // is the link's upstream node.
-                    prev[next.0] = Some((node, link_id, !at_downstream));
-                    q.push_back(next);
+            for &(_next, link_id) in &adj[node.0] {
+                let Some(link) = network.link(link_id) else {
+                    continue;
+                };
+                // Traverse this link in the direction that leaves `node`.
+                let forward = link.upstream == node;
+                let arrival = if forward {
+                    link.downstream
+                } else {
+                    link.upstream
+                };
+                if !seen[arrival.0] {
+                    seen[arrival.0] = true;
+                    prev[arrival.0] = Some((link_id, forward));
+                    queue.push_back(arrival);
                 }
             }
         }
 
-        if found {
-            let mut terms: Vec<LoopTerm> = Vec::new();
-            let mut cursor = goal;
-            while cursor != start {
-                let Some((parent, link_id, forward)) = prev[cursor.0] else {
-                    break;
-                };
-                terms.push(LoopTerm {
-                    link: link_id,
-                    node: parent,
-                    forward,
-                });
-                cursor = parent;
-            }
-            terms.reverse();
+        if !found {
+            continue;
+        }
+
+        // Walk the predecessor chain back from the goal, then flip it so the
+        // terms run start -> ... -> goal.
+        //
+        // `prev` is keyed by arrival node, so `cursor` is always the node the
+        // pending traversal arrives at, and the node it departs from is the
+        // same entry's other end. That keeps the two consistent by
+        // construction, which a cursor advanced to the BFS parent is not.
+        let mut terms: Vec<LoopTerm> = Vec::new();
+        let mut cursor = goal;
+        while cursor != start {
+            let Some((link_id, forward)) = prev[cursor.0] else {
+                break;
+            };
+            let link = network.link(link_id);
+            let departure = match link {
+                Some(l) if forward => l.upstream,
+                Some(l) => l.downstream,
+                None => cursor,
+            };
             terms.push(LoopTerm {
-                link: chord.id,
-                node: chord.upstream,
-                forward: true,
+                link: link_id,
+                node: departure,
+                forward,
             });
-            if terms.len() > 1 {
-                loops.push(Loop::from_terms(terms));
-            }
+            // This traversal arrives at `cursor`; the next one departs from
+            // `cursor`, so keep it as the cursor.
+            cursor = departure;
+        }
+        terms.reverse();
+
+        terms.push(LoopTerm {
+            link: chord.id,
+            node: chord.upstream,
+            forward: true,
+        });
+
+        if terms.len() > 1 {
+            loops.push(Loop::from_terms(terms));
         }
     }
     loops
