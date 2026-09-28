@@ -27,4 +27,5 @@ pub mod contact;
 pub mod error;
 pub mod friction;
 pub mod lubrication;
+pub mod reynolds;
 pub mod wear;

@@ -401,58 +401,46 @@ assumed.
 
 ### Still open, in rough priority order
 
-- [ ] **Reynolds equation solver** (line 115) - the centrepiece of tribology
-      and the largest single gap. **Not shipped: attempted twice, deliberately
-      stopped.** Everything learned is recorded here so the third attempt does
-      not repeat it.
+- [x] **Reynolds equation solver** (line 115) -
+      `tpt-fluids-tribo/src/reynolds.rs`. 15 tests. Finite-volume
+      discretisation exact to machine precision against a manufactured
+      solution; Thomas on a negative M-matrix; load capacity, attitude angle,
+      and the minimum film ratio.
+      **Solved for the full-film regime only, and the solver refuses outside
+      it.** `solve_journal_bearing` solves at two grid resolutions and
+      requires them to agree; past about `e = 0.4` they do not, and the call
+      returns `OutsideValidRange` rather than the 8e5 the raw solve produces.
+      A real bearing runs at `e = 0.2`-`0.3`, so this is the regime a
+      designer sizes against.
 
-      **Verified and reusable:**
-      - The finite-volume discretisation is exact to machine precision against
-        a manufactured solution (nodal error ~5e-15). The form is
-        `h_l^3 P_{i-1} - (h_r^3 + h_l^3) P_i + h_r^3 P_{i+1} = 6 (h_r - h_l) dX`,
-        with film thickness at the **faces** and pressure at the **cell
-        centres**. Confusing those two gives a smooth, plausible, entirely
-        wrong solution with a constant 0.45 error and no convergence at all.
-        That cost an hour and is the single easiest way to get this wrong.
-      - Plain Thomas is **unstable** here: the matrix is not diagonally
-        dominant, and at `eps = 0.6` the peak pressure oscillates
-        86 / 538 / 270 / 2935 under grid refinement. Gauss-Seidel with
-        over-relaxation (`omega = 1.4`) is stable and grid-converged.
+      Two artefacts of the Sommerfeld formulation are documented rather than
+      hidden, because both look like solver bugs if you do not know:
+      - The condition pressurises the whole circumference, so the solution
+        goes **negative in the diverging half for any non-zero
+        eccentricity** (-0.23 at `e = 0.2`, -0.82 at `e = 0.3`). That is the
+        clearest evidence the cavitation condition is needed, and a test
+        tracks the excursion growing with `e`.
+      - At exactly `e = 0` the boundary conditions alone force a linear
+        pressure ramp carrying `1/(2 pi)`. A concentric bearing physically
+        carries nothing; the Sommerfeld condition presumes a converging wedge
+        exists and at `e = 0` none does.
 
-      **The trap, and why this was stopped:**
-      - The closed-form long-bearing solution I first reached for,
-        `P = 3 eps sin(2 pi X) [1 + 2 eps cos(2 pi X)] / (2 eps^2 (1+eps^2)(1-2eps^2))`,
-        **does not satisfy the PDE**. Its residual against
-        `d/dX(H^3 dP/dX) = 6 dH/dX` is O(100), not O(1e-15). It was being
-        used as the validation target and would have "confirmed" a wrong
-        solver. Always check a recalled closed form against the residual
-        before trusting it.
-      - The real long-bearing solution has a pressure spike at
-        `eps = 1/sqrt(2)`, so naive quadrature over it is dominated by the
-        spike and the load integral is meaningless there anyway.
-      - Past roughly `eps = 0.4` the full-Sommerfeld condition is unphysical.
-        The film separates in the diverging region, the PDE drives the
-        pressure negative, and without Reynolds' supplementary cavitation
-        condition the solution **blows up** (8e5 at `eps = 0.5`) and reports
-        negative pressures for `eps >= 0.6`. A lubricant cannot sustain
-        negative pressure.
-      - A cavitation iteration was tried - solve, find where `P < 0`, force
-        `P = 0` from there, re-solve - and did not converge in a useful time
-        in the iteration budget available. It likely needs a better
-        outer-loop strategy (a sweep-line or pivot-based scheme rather than
-        60 repeated full solves) and a convergence test on the cavity
-        boundary rather than on `P`.
+      **The bug that mattered most:** the `P(0) = 1` Dirichlet contribution to
+      the first matrix row was being dropped. The result stayed smooth and
+      plausible but was wrong everywhere, and the manufactured-solution test
+      could not catch it because that test uses homogeneous boundaries. The
+      tell was `Pmax = 1.00000` for every grid, which is just the boundary
+      value. Fixing it took the peak from 1.8195 to the correct
+      grid-independent 1.81954 and made the solver converge.
 
-      **What the third attempt should do:** implement the cavitation
-      iteration properly, then validate against invariants that need no
-      closed form. The PDE integrated over the full domain gives an exact
-      global constraint, `P'(1) = P'(0)` when `H(0) = H(1)`, which is the
-      natural form of the spec's "Reynolds equation satisfies global load
-      equilibrium" (line 128). Also check: pressure non-negative everywhere,
-      load vanishing as `eps -> 0` and `eps -> 1`, and a single-peaked load
-      curve. Only once those pass is it worth finding a trustworthy
-      benchmark to check the magnitude against.
-      - Kani: Reynolds global load equilibrium (line 128) stays blocked on this.
+      **Still open:** Reynolds' supplementary cavitation condition for
+      `e > 0.4`. A post-hoc "find where P < 0" loop cannot work, because the
+      plain solve spikes *positive* before it ever goes negative. A
+      pivot/bubble method during elimination was tried and detects some
+      cavitation but does not converge for high `e`. A proper complementarity
+      treatment (JFO, or penalty) is the remaining work. Until then the
+      refusal is the correct behaviour, not a workaround.
+      - Kani: Reynolds global load equilibrium (line 128) still blocked on it.
 
 - [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116)
 - [x] **LuGre dynamic friction** (line 119) - `tpt-fluids-tribo/src/friction.rs`,
