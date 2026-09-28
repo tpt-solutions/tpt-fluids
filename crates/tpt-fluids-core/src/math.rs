@@ -162,6 +162,19 @@ pub fn tanh(x: f64) -> f64 {
     }
 }
 
+/// Arccosine, via `std` when available and `libm` otherwise.
+#[inline]
+pub fn acos(x: f64) -> f64 {
+    #[cfg(feature = "std")]
+    {
+        x.acos()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        libm::acos(x)
+    }
+}
+
 /// Absolute value. `f64::abs` is available in `core`, so this needs no shim;
 /// it is re-exported so call sites need only one math import.
 #[inline]
