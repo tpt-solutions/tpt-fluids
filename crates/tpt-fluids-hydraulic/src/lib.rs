@@ -56,16 +56,16 @@
 //!   Method of Characteristics solver for the canonical reservoir-fed pipe
 //!   under a prescribed valve closure.
 //!
-//! - [`components`]: valves from `Cv` or a `K` coefficient, pump curves,
-//!   cavitation state from the cavitation number, surge tanks, and minor-loss
-//!   coefficients.
+//! - [`components`]: valves from `Cv` or a `K` coefficient, pump and turbine
+//!   characteristic curves with three-point fitting, the four turbine quadrants,
+//!   cavitation state and inception, surge tanks, and minor-loss coefficients.
 //!
 //! - [`differentiable`]: head loss over forward-mode dual numbers, so a
 //!   gradient-based optimiser gets `dh/dD` exactly rather than by finite
 //!   differences.
 //!
 //! Still to come in this crate: the multi-node MOC network with wave
-//! reflection, and the turbine four-quadrant characteristic curve.
+//! reflection.
 
 pub mod components;
 pub mod differentiable;

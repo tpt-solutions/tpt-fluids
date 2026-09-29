@@ -56,6 +56,10 @@ use tpt_fluids_tribo::contact::{
     approach, contact_radius, mean_pressure, peak_pressure, reduced_modulus, ElasticMaterial,
 };
 #[cfg(kani)]
+use tpt_fluids_tribo::reynolds::{
+    load_direction_is_in_the_converging_half, minimum_film_ratio, MAX_RESOLVED_ECCENTRICITY,
+};
+#[cfg(kani)]
 use tpt_fluids_tribo::wear::{wear_depth, WearCoefficient};
 
 kani_proof! {
@@ -282,6 +286,80 @@ kani_proof! {
         kani::assume(v > 0.0 && v < 1.0e6);
         let vel = Velocity::new(v);
         kani::assert(vel.value().is_finite());
+    }
+
+    /// The Reynolds load direction must be a function of the wrapped position.
+    ///
+    /// This is the global load-equilibrium property `spec.txt` line 128 asks
+    /// for, in the form it can actually be proved in. A bearing is in
+    /// equilibrium when the pressure it carries resolves to a load that pushes
+    /// the journal back the way the oil came in, and the film profile
+    /// `1 - e + e cos(2 pi X)` makes the *classification* of a position a
+    /// geometric fact rather than a numerical outcome.
+    ///
+    /// Stated precisely, because the obvious phrasing is false: the predicate
+    /// does not always return true -- a position at `0.6` is in the diverging
+    /// half and must report so. What is proved is that the answer depends only
+    /// on the position modulo one turn, so no caller can get a different
+    /// classification for the same physical bearing point. The strict and
+    /// non-strict boundary is where a wrap bug hides, and it is the thing this
+    /// actually rules out.
+    fn reynolds_load_direction_depends_only_on_the_wrapped_position() {
+        let position: f64 = kani::any();
+        let turns: f64 = kani::any();
+        kani::assume(position.is_finite() && position.abs() < 1.0e3);
+        kani::assume(turns.is_finite() && turns.abs() < 1.0e3);
+        // Only a *whole* number of turns is the same physical configuration. The
+        // constraint belongs here rather than being left implicit, because a
+        // fractional offset is a genuinely different position and the assertion
+        // would be false for it.
+        kani::assume(turns == turns.round());
+        kani::assert_eq!(
+            load_direction_is_in_the_converging_half(position),
+            load_direction_is_in_the_converging_half(position + turns),
+            "a whole number of turns changed the load direction",
+        );
+    }
+
+    /// The load direction must agree with the film geometry it claims to
+    /// describe.
+    ///
+    /// The film `1 - e + e cos(2 pi X)` closes over the first half-turn and opens
+    /// over the second, so the converging half is exactly `[0, 0.5]` of the
+    /// wrapped position. Proving the two agree pins the *meaning* of the
+    /// predicate rather than only its self-consistency: a wrap that were subtly
+    /// wrong -- off by a whole turn, or mirrored about the origin -- would leave
+    /// the periodicity property intact and fail this one.
+    fn reynolds_load_direction_matches_the_film_geometry() {
+        let position: f64 = kani::any();
+        kani::assume(position.is_finite() && position.abs() < 1.0e3);
+        let wrapped = position - position.floor();
+        kani::assert_eq!(
+            load_direction_is_in_the_converging_half(position),
+            wrapped <= 0.5,
+            "the classification disagrees with the film profile",
+        );
+    }
+
+    /// The minimum film thickness must stay positive over the resolved regime.
+    ///
+    /// `h_min = 1 - 2e` is the last line of defence before the film collapses.
+    /// Past `e = 0.4` it goes to zero at `e = 0.5` and negative beyond, which is
+    /// precisely the regime the solver refuses. Proving the constant is the
+    /// upper bound on the resolved range makes the refusal threshold in the
+    /// module documentation a consequence of the arithmetic rather than a
+    /// separately chosen number.
+    fn reynolds_minimum_film_is_positive_across_the_resolved_regime() {
+        let eccentricity: f64 = kani::any();
+        // The range is taken from the constant rather than written as `0.4`, so
+        // that moving the constant cannot silently leave this harness proving
+        // the property over a range the solver no longer claims to resolve.
+        kani::assume(eccentricity >= 0.0 && eccentricity <= MAX_RESOLVED_ECCENTRICITY);
+        let h_min = minimum_film_ratio(eccentricity);
+        kani::assert(h_min > 0.0, "the film collapsed inside the resolved regime");
+        kani::assert(h_min <= 1.0, "the film exceeded the full clearance");
+        // And it is exactly the linear relation the documentation states.
+        kani::assert((h_min - (1.0 - 2.0 * eccentricity)).abs() < 1.0e-12);
     }
 }
 

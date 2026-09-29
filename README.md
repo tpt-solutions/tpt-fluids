@@ -13,7 +13,9 @@ A feature-gated workspace covering three fluid domains:
   roughness and appendage extension, the ITTC-1957 model-ship line, Michell's
   thin-ship residuary integral, Holtrop-Mennen resistance, Froude scaling,
   seakeeping response amplitude operators, MMG manoeuvring, propulsion, and
-  Froude-Krylov wave excitation.
+  Froude-Krylov wave excitation. The Michell integral and the total resistance
+  chain are also available over forward-mode dual numbers, so a gradient-based
+  hull-form optimiser gets `dR/dFr` exactly.
 - **Tribology** - Hertzian contact, Petroff and Stribeck lubrication, the
   hydrodynamic journal bearing, Archard's wear law, the lambda ratio, and
   frictional heating.
@@ -80,15 +82,15 @@ Features on the umbrella: `core` (default), `hydraulic`, `marine`, `tribo`,
 
 ## Testing
 
-347 tests across the workspace, plus 2 doctests.
+446 tests across the workspace, plus 8 doctests.
 
 | Suite | Count | What it checks |
 |-------|-------|----------------|
 | `core` | 42 | Quantity algebra, dimensional consistency, EOS, viscosity |
-| `hydraulic` | 73 + 2 ignored | Correlations against published values; solver convergence |
-| `marine` | 125 | Every correlation against a reference value, plus limit cases |
-| `tribo` | 59 | Hertz against its closed forms; Stribeck, Archard, lambda |
-| `verify` | 26 | Proptest invariants: dimensional invariance, monotonicity, exact scalings |
+| `hydraulic` | 94 + 2 ignored | Correlations against published values; solver convergence |
+| `marine` | 139 | Every correlation against a reference value, plus limit cases |
+| `tribo` | 124 | Hertz against its closed forms; Stribeck, Archard, lambda |
+| `verify` | 31 | Proptest invariants: dimensional invariance, monotonicity, exact scalings |
 | `umbrella` | 8 | Cross-crate consistency through the re-exports |
 | `marine` benchmarks | 8 | Two independent methods agreeing about the same ship |
 

@@ -123,7 +123,8 @@ fn colebrook_white(reynolds: f64, relative_roughness: f64) -> Result<f64, Hydrau
 /// and absolute roughness.
 ///
 /// `reynolds` must already be formed from the flow's velocity, the pipe
-/// diameter, and the fluid's viscosity — see [`crate::pipe::head_loss`], which
+/// diameter, and the fluid's viscosity — see
+/// [`crate::differentiable::head_loss`], which
 /// does that and then calls this.
 pub fn friction_factor(
     model: FrictionModel,

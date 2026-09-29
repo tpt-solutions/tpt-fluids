@@ -54,7 +54,7 @@ impl HullInertia {
     ///
     /// A ship of length `L` and gyradius `k` (about a quarter of the length
     /// is the usual rule) has `Iz = m k^2`. Added masses default to zero
-    /// here and are set from [`with_added_masses`].
+    /// here and are set from [`HullInertia::with_added_masses`].
     pub fn new(mass: Mass, length: Length, gyradius_ratio: f64) -> Result<Self> {
         if mass.value() <= 0.0 {
             return Err(MarineError::NonPositive("mass"));

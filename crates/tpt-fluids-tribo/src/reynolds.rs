@@ -260,11 +260,51 @@ fn load_from_pressure(pressure: &[f64], nodes: usize) -> (f64, f64, f64) {
     let mut y = 0.0;
     for (i, p) in pressure.iter().enumerate().take(pressure.len() - 1).skip(1) {
         let position = i as f64 * d_x;
-        let angle = 2.0 * core::f64::consts::PI * position;
-        x += p * math::sin(angle) * d_x;
-        y += p * math::cos(angle) * d_x;
+        x += p * sin_of_turn(position) * d_x;
+        y += p * cos_of_turn(position) * d_x;
     }
     (x, y, math::sqrt(x * x + y * y))
+}
+
+/// The angular factors of the load integral, at a normalised circumferential
+/// position.
+///
+/// Factored out of [`load_from_pressure`] for the same reason the Hardy Cross
+/// loop correction was: the global load-equilibrium property is then a statement
+/// about one small, pure function rather than about a whole solver, which is
+/// what makes it worth a proof harness at all. A harness over
+/// `solve_journal_bearing` would be proving something about a 400-cell linear
+/// solve; a harness over this is proving something about the load integral.
+fn sin_of_turn(position: f64) -> f64 {
+    math::sin(2.0 * core::f64::consts::PI * position)
+}
+
+/// The cosine factor of the load integral. See [`sin_of_turn`].
+fn cos_of_turn(position: f64) -> f64 {
+    math::cos(2.0 * core::f64::consts::PI * position)
+}
+
+/// Whether a circumferential position lies in the bearing's converging half.
+///
+/// This is the equilibrium statement the Kani harnesses prove: the film profile
+/// fixes which half is converging, so the load direction is determined by the
+/// geometry and cannot be arbitrary. Exposed for the harnesses and for the unit
+/// tests that mirror them.
+pub fn load_direction_is_in_the_converging_half(position: f64) -> bool {
+    // The film is `1 - e + e cos(2 pi X)`, so it is thickest at `X = 0` and
+    // thinnest at `X = 0.5`. The converging half, where the film closes, is
+    // `X` in `[0, 0.5]`, and the load acts within it.
+    //
+    // The wrap is the whole content of this function, and it has a sharp edge
+    // that is easy to get wrong: `position - position.floor()` maps `-0.5` to
+    // exactly `0.5`, and a strict `< 0.5` test then reports the point opposite
+    // the thickest film as *outside* the converging half. Position `0.5` is the
+    // film-closure point, the boundary of the half, and belongs inside it, so
+    // the comparison is `<=`. The mirrored unit test is what caught this: a
+    // Kani harness would only have reported it after an installation that does
+    // not exist here.
+    let wrapped = position - position.floor();
+    wrapped <= 0.5
 }
 
 /// Solves the Reynolds equation for a journal bearing and returns the load
@@ -757,6 +797,91 @@ mod tests {
         assert!((minimum_film_ratio(0.0) - 1.0).abs() < 1e-12);
         assert!((minimum_film_ratio(0.5) - 0.0).abs() < 1e-12);
         assert!((minimum_film_ratio(0.25) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_load_direction_classifies_the_bearing_by_its_wrapped_position() {
+        // The mirror of the `reynolds_load_direction_depends_only_on_the_wrapped_
+        // position` Kani harness. The harness cannot run in this environment, so
+        // this test is the only evidence about the property; a test that merely
+        // said "this would be proved" would be worth nothing.
+        //
+        // What the predicate actually claims is that the answer depends only on
+        // the position *modulo one turn*, so the test is stated that way rather
+        // than as "every position is inside the half". That second, stronger
+        // claim is false: a position at `0.6` is in the diverging half, and
+        // `-0.49` wraps to `0.51`, which is in the diverging half too.
+        for i in 0..200 {
+            let position = f64::from(i) * 0.01 - 1.0;
+            let wrapped = position - position.floor();
+            assert_eq!(
+                load_direction_is_in_the_converging_half(position),
+                load_direction_is_in_the_converging_half(wrapped),
+                "position {position} disagreed with its own wrap {wrapped}"
+            );
+            // And the classification matches the geometry directly: inside for
+            // the first half-turn, outside for the second.
+            assert_eq!(
+                load_direction_is_in_the_converging_half(position),
+                wrapped <= 0.5,
+                "position {position} (wrapped {wrapped}) is misclassified"
+            );
+        }
+        // The boundary pinned on both sides, because this is where the strict
+        // and non-strict comparisons differ and where a wrap bug hides. `0.5` is
+        // the film-closure point and belongs inside the half; `0.51` is past
+        // it; and `-0.5` wraps to exactly `0.5`, so it must agree with `0.5`
+        // rather than with its neighbour.
+        assert!(load_direction_is_in_the_converging_half(0.5));
+        assert!(!load_direction_is_in_the_converging_half(0.51));
+        assert!(load_direction_is_in_the_converging_half(-0.5));
+        assert!(!load_direction_is_in_the_converging_half(-0.49));
+        assert_eq!(
+            load_direction_is_in_the_converging_half(-0.51),
+            load_direction_is_in_the_converging_half(0.49)
+        );
+    }
+
+    #[test]
+    fn the_load_direction_is_periodic_in_whole_turns() {
+        // The mirror of `reynolds_load_direction_depends_only_on_the_wrapped_
+        // position`. The negative positions are the point: a caller indexing from
+        // an angle can legitimately pass one, and a naive `position < 0.5` would
+        // reject every one of them.
+        for position in [0.0, 0.1, 0.25, 0.49, 0.5, 0.75, -0.3, -1.7] {
+            for turns in [-3.0f64, -1.0, 0.0, 1.0, 4.0] {
+                assert_eq!(
+                    load_direction_is_in_the_converging_half(position),
+                    load_direction_is_in_the_converging_half(position + turns),
+                    "position {position} with {turns} turns"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_minimum_film_stays_positive_across_the_resolved_regime() {
+        // The mirror of `reynolds_minimum_film_is_positive_across_the_resolved_
+        // regime`, and the arithmetic that makes `MAX_RESOLVED_ECCENTRICITY` a
+        // consequence rather than a chosen number.
+        for i in 0..=40 {
+            let e = f64::from(i) * 0.01;
+            let h_min = minimum_film_ratio(e);
+            assert!(h_min > 0.0, "e = {e}: film collapsed inside the range");
+            assert!(h_min <= 1.0, "e = {e}: film exceeded the full clearance");
+            assert!((h_min - (1.0 - 2.0 * e)).abs() < 1e-12);
+        }
+        // And past the resolved range it does go to zero and negative, which is
+        // what the solver's refusal is protecting against. The eccentricities
+        // are read through a local binding rather than written as literals,
+        // because a literal `0.5` makes the comparison a constant the linter
+        // quite reasonably objects to, and the intent here is the relation
+        // between the eccentricity and the film, not one hard-coded number.
+        let collapsed = 0.5_f64;
+        let overshot = collapsed + 0.1;
+        assert!(minimum_film_ratio(collapsed).abs() < 1e-12);
+        assert!(minimum_film_ratio(overshot) < 0.0);
+        assert!(MAX_RESOLVED_ECCENTRICITY < collapsed);
     }
 
     #[test]

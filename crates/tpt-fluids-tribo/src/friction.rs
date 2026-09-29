@@ -237,7 +237,7 @@ impl LuGre {
     /// The bristle is advanced with an explicit Euler step on the deflection.
     /// The bristle relaxation rate is `s_0 |v| / F_ss`, which is stiff for a
     /// large `s_0`, so the caller must choose a timestep well below its
-    /// reciprocal. [`relaxation_time`] gives that timescale.
+    /// reciprocal. [`LuGre::relaxation_time`] gives that timescale.
     pub fn step(&mut self, velocity: f64, dt: f64) -> f64 {
         if dt <= 0.0 {
             return self.force(velocity);

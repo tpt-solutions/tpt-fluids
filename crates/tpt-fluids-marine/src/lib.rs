@@ -30,6 +30,10 @@
 //! - [`holtrop`]: the Holtrop-Mennen general estimate of total resistance from
 //!   principal dimensions, split into wave-making, friction, residuary, and
 //!   appendage components.
+//! - [`differentiable`]: the Michell residuary integral and the total
+//!   resistance chain over forward-mode dual numbers, so a gradient-based
+//!   hull-form optimiser gets `dR/dFr` exactly instead of by finite
+//!   differences.
 //!
 //! # A caution on friction coefficients
 //!
@@ -52,6 +56,7 @@
 
 extern crate alloc;
 
+pub mod differentiable;
 pub mod error;
 pub mod excitation;
 pub mod froude_scaling;

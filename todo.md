@@ -159,6 +159,42 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       closure. The frictionless limit reproduces the Joukowsky rise exactly,
       which is the check that matters. Still to do: a multi-node network with
       wave reflection at boundaries, and the friction-damped rise integral.*
+      - **Multi-node reflection: attempted, not shipped, findings recorded.**
+        The single-reach solver advances one characteristic pair, so a wave has
+        no state to send back -- that is the structural reason it cannot
+        reflect, and a head array updated in place cannot fix it. A wave is a
+        *directional travelling perturbation*, so the reflection-capable form
+        needs two accumulator arrays (`c_minus` upstream, `c_plus` downstream)
+        onto which waves are superimposed, and only then can a wave cross the
+        pipe, turn round, and add to what is already there.
+        Built and instrumented, and the reflection machinery itself worked: the
+        wave was traced travelling upstream one reach per step, reflecting at the
+        reservoir at full amplitude, and returning downstream. Four real defects
+        were found and fixed along the way, all of which produce plausible
+        numbers rather than errors:
+        1. The steady profile applied `(a/g) Q` *per reach*, putting `8 (a/g) Q`
+           across an 8-reach pipe instead of `(a/g) Q` once -- a valve at
+           -308 m under a 100 m reservoir. The loss scales with *distance*, so
+           it needs a `dx/L` factor.
+        2. The shift copied without clearing, smearing a wave across every reach
+           at once instead of letting it occupy one.
+        3. Reflection read `c_minus[0]` *after* the shift had already carried the
+           wave out of the pipe, so it always found zero and waves vanished at
+           the reservoir instead of returning.
+        4. The valve read only the returning wave, delaying the Joukowsky rise
+           by `2 reaches` steps.
+        **Why it was not shipped anyway:** fixing the four above still left the
+        valve head collapsing back to steady the instant the flow stopped, which
+        is wrong -- a closed valve holds *pressure*, not flow, and a
+        prescribed-flow boundary cannot represent that. The correct downstream
+        boundary is prescribed-*head* (or a dead end, reflecting at `-1`), which
+        is a different boundary condition and therefore a different solver, not a
+        bug in this one. Shipping the wave machinery behind a boundary condition
+        that cannot hold the physics would have produced a solver that reflected
+        waves beautifully and still got the pressure history wrong. The code was
+        reverted; `water_hammer.rs` is unchanged from its last commit. The
+        reflection coefficients that would drive the correct form are now
+        stated in this file rather than in code that does not exist.
 - [x] Implement component models: valve `Cv` and `K` coefficients, pump
       characteristic curves (quadratic three-point fit, shut-off head, runout
       flow, hydraulic power), cavitation state from the cavitation number, and
@@ -176,7 +212,12 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       including a *residual* test that checks the Colebrook-White output
       satisfies its own defining equation to 1e-6 independently of the
       iteration used to produce it
-- [ ] Rustdoc for the solvers once they land
+- [x] Rustdoc for the solvers. Every module carries crate-level rationale, the
+      governing equation, and — where the physics has a limit — an explicit
+      statement of what is *not* modelled. The examples that are worth reading
+      first are the ones about limits: the Hardy Cross convergence caveat in
+      `lib.rs`, the Reynolds validity discussion above `solve_journal_bearing`,
+      and the quasi-steady temperature-rise warning in `wear.rs`.
 - [x] Froude-Krylov excitation: the first-order wave excitation force on a
       wall-sided hull, `F_x = rho g a (1 - e^(-kT)) 2 sin(kL/2) / k`, resolved
       onto the ship's axes for any heading. Both limit cases are tested: the
@@ -253,10 +294,29 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       and the cavitation-limited diameter. Validated against an independent
       actuator-disc estimate, which back-solves K_T ~ 0.38, and against a
       3000 DWT feeder design point at 18 kn.
-- [ ] Make the Michell integral differentiable via `tpt-math-autodiff` for
-      hull-form optimization
-- [ ] Integration test: model-ship resistance extrapolation matches
-      Holtrop-Mennen benchmarks (see Phase 7)
+- [x] Make the Michell integral differentiable via `tpt-math-autodiff` for
+      hull-form optimization - `tpt-fluids-marine/src/differentiable.rs`, which
+      is what the already-declared-but-unused `tpt-math-autodiff` dependency in
+      that crate's manifest was waiting for. The residuary polynomial is written
+      in Horner form over dual numbers, plus the `0.5 W Fr^2 (C_f + C_r)` total
+      chain and `P = R V / (eta D)`. 14 tests.
+      The ITTC-1957 friction correlation is deliberately **not** differentiated:
+      it is an empirical model-test fit, so its derivative has no physical
+      standing, and `C_f` is held constant instead. The `V^2` scaling, which is
+      the part that actually moves with the design, is still carried exactly.
+      Two things the tests caught rather than confirmed. A gradient descent on
+      resistance-per-unit-speed converges to the *same* interior Froude number
+      from both 0.05 and 0.8, which is a stronger claim than "it decreased". And
+      the first scale assertion was wrong in a way worth recording: a kilonewton
+      band borrowed from the `froude_scaling` feeder test disagreed by a factor
+      of 6, because that module normalises by `rho g` times a displacement
+      treated as a *volume* while the Michell path uses a displacement *force*.
+      The test now asserts `R/W`, which is convention-free -- the same class of
+      error as the two ITTC friction conventions this crate already warns about
+      twice.
+- [x] Integration test: model-ship resistance extrapolation matches
+      Holtrop-Mennen benchmarks (see Phase 7, where the cross-method benchmark
+      suite landed; the residual line here was stale)
 - [x] Froude-Krylov excitation: the first-order wave excitation force on a
       wall-sided hull, `F_x = rho g a (1 - e^(-kT)) 2 sin(kL/2) / k`, resolved
       onto the ship's axes for any heading. Both limit cases are tested: the
@@ -442,7 +502,21 @@ assumed.
       refusal is the correct behaviour, not a workaround.
       - Kani: Reynolds global load equilibrium (line 128) still blocked on it.
 
-- [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116)
+- [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116). Left open
+      deliberately, and the reason is worth recording rather than glossing.
+      `spec.txt` line 116 asks for two things: the coupled Reynolds + elastic
+      deformation solve, and the Dowson-Hampton film-thickness *formulas*. The
+      first is blocked on `tpt-fem-elasticity` (see the `tpt-fem-contact` note
+      above), and the second is a correlation whose coefficients come from a
+      long chain of numerical solutions that this workspace has no way to
+      reproduce. I attempted to source the Hamrock-Dowson coefficients and could
+      not obtain them from any source that renders as text: the Penn State and
+      NASA NTRS PDFs return raw compressed streams, and the MDPI review returns
+      HTTP 403. Writing `2.69 U^0.68 G^0.49 (1 - e^(-0.68k))` from memory would
+      be precisely the failure mode this file is built to prevent -- a precise,
+      plausible, entirely unverified number. It is not shipped. The blocker is
+      therefore "the constants need a citable source", which is a real and
+      answerable one, not "we forgot".
 - [x] **LuGre dynamic friction** (line 119) - `tpt-fluids-tribo/src/friction.rs`,
       with Coulomb as the degenerate baseline, the Stribeck steady-state
       curve, the one-state bristle ODE, the relaxation timescale, and a sweep
@@ -450,17 +524,63 @@ assumed.
       loads to exactly F_ss/s_0, the total settles to F_ss + s_2 v, and one
       step after a velocity jump the force is 24.4 against a steady state of
       20.025, a 22 percent memory excess that a static curve cannot produce.
-- [ ] **Load capacity for slider and thrust bearings**, and the differentiable
-      load-capacity integrals (lines 115, 120)
-- [ ] **Running-in wear simulation** (line 118)
-- [ ] **Turbine four-quadrant curves and cavitation inception** (line 97,
-      Phase 3 line 175). `PumpCurve` and `CavitationState` exist; a turbine is
-      still only a loss coefficient.
-- [ ] **Kani: Hardy Cross monotone convergence** (line 126) and **MOC CFL
-      stability** (line 127). Both target solvers that exist, so these are
-      tractable now that the harness pattern is established.
-- [ ] **Kani: Reynolds global load equilibrium** (line 128) - blocked on the
-      solver above.
+- [x] **Load capacity for slider and thrust bearings**, and the differentiable
+      load-capacity integrals (lines 115, 120). `reynolds.rs` now factors the
+      validated finite-volume core out as `solve_profile_on_grid`, so slider and
+      pivoted-thrust pads reuse the journal bearing's discretisation rather than
+      growing their own copies. Both use **Gumbel** conditions (`p = 0` at both
+      ends), not the journal's Sommerfeld: in a wedge there is no full circle
+      for a diverging region to pressurise against, and reusing `P(0) = 1` would
+      manufacture a pressure the geometry does not have. `thrust_pad_load`
+      carries the `r dr` area factor that a line integral drops.
+- [x] **Running-in wear simulation** (line 118). `RunningIn` in `wear.rs`: an
+      exponential decay of the excess wear coefficient, with the closed-form
+      volume integral checked against a numerical integration of the coefficient
+      itself. That check earned its keep immediately — it caught a missing `load`
+      factor in the excess term. Two claims that the tests disproved and that are
+      now recorded rather than asserted: running-in wear is *less* than a
+      fresh-contact coefficient predicts but *more* than a steady one, and
+      `settled_distance = 3d` is 5% of the *excess*, not of the steady
+      coefficient (for a 100:1 ratio the coefficient is still 6x steady at 3d,
+      and the true 5% distance is `d ln(20(k0/ks - 1)) ~ 7.6d`).
+- [x] **Turbine four-quadrant curves and cavitation inception** (line 97,
+      Phase 3 line 175). `TurbineCurve` covers all four quadrants: the
+      generating and windmilling quadrants fall out of one parabola, and the
+      reversed branch is separate because the runner sees the flow from the other
+      side, continuous in value at zero flow. `CavitationInception` carries a
+      flow-dependent inception number and `CavitationMargin` joins it to the
+      available NPSH; a machine checked only at its best point cavitates at
+      overload, which the constant-number model misses. Both machine curves also
+      gained the three-point quadratic fit this file already claimed they had.
+- [x] **Kani: Hardy Cross monotone convergence** (line 126) and **MOC CFL
+      stability** (line 127). `loop_correction` is factored out of the solver so
+      the convergence property is a statement about one small function, with four
+      harnesses covering correction direction, scaling, the exact Courant
+      boundary, and the Joukowsky rise. Each is mirrored by a unit test, because
+      the harnesses sit behind `cfg(kani)` and cannot run on this machine — a test
+      that says "this would be proved" is not evidence.
+- [x] **Kani: Reynolds global load equilibrium** (line 128). The "blocked on the
+      solver above" note was stale: `solve_journal_bearing` and
+      `solve_profile_on_grid` both landed, so this is tractable. The property is
+      stated about one small function rather than the solver, for the reason the
+      Hardy Cross harnesses were: a harness over a 400-cell linear solve proves
+      something about a linear solve, which is not what line 128 is asking about.
+      `reynolds.rs` factors out `load_direction_is_in_the_converging_half` and
+      `sin_of_turn`/`cos_of_turn`, and three harnesses prove the load direction
+      is a function of the wrapped position, agrees with the film profile, and
+      that `h_min = 1 - 2e` stays positive across the resolved regime -- which
+      makes `MAX_RESOLVED_ECCENTRICITY` a consequence of the arithmetic rather
+      than a separately chosen constant. Each is mirrored by a unit test,
+      because the harnesses sit behind `cfg(kani)` and cannot run here.
+      **The mirror earned its keep immediately.** The first harness asserted the
+      load direction is *always* in the converging half, which is simply false:
+      a position at `0.6` is in the diverging half and must report so. The unit
+      test failed on `position -0.49` and forced the property to be restated
+      correctly, and a second failure on `-0.5` exposed a real off-by-one at the
+      wrap boundary -- `position - position.floor()` maps `-0.5` to exactly
+      `0.5`, so the comparison must be `<=`, not `<`. Both are pinned now. A
+      Kani harness would have reported them as counterexamples; without the
+      mirrors, nothing here would have been evidence of anything.
 - [ ] **`tpt-systems-optimisation`** (lines 156, 176) - consumer-side, not
       present as a sibling repo.
 - [ ] **EHL coupling with `tpt-fem-elasticity`** (line 153) - see the
