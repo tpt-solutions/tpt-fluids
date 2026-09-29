@@ -82,12 +82,12 @@ Features on the umbrella: `core` (default), `hydraulic`, `marine`, `tribo`,
 
 ## Testing
 
-446 tests across the workspace, plus 8 doctests.
+459 tests across the workspace, plus 8 doctests.
 
 | Suite | Count | What it checks |
 |-------|-------|----------------|
 | `core` | 42 | Quantity algebra, dimensional consistency, EOS, viscosity |
-| `hydraulic` | 94 + 2 ignored | Correlations against published values; solver convergence |
+| `hydraulic` | 107 + 2 ignored | Correlations against published values; solver convergence; network sizing |
 | `marine` | 139 | Every correlation against a reference value, plus limit cases |
 | `tribo` | 124 | Hertz against its closed forms; Stribeck, Archard, lambda |
 | `verify` | 31 | Proptest invariants: dimensional invariance, monotonicity, exact scalings |

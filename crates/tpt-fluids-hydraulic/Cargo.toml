@@ -15,6 +15,12 @@ categories = ["science", "mathematics"]
 
 [dependencies]
 tpt-fluids-core = { workspace = true, features = ["std"] }
+# `nlp` enables the augmented-Lagrangian constrained solver in
+# `tpt_opt_core::nlp`, which is what the network-sizing optimiser drives. It
+# implies `alloc`; it is NOT a dependency on `tpt-math-optimize-general`, which
+# the in-crate BFGS implementation replaced, so the published crate is not
+# pulled in.
+tpt-opt-core = { workspace = true, features = ["nlp"] }
 tpt-math-graph = { workspace = true, features = ["std"] }
 tpt-math-linalg = { workspace = true, features = ["std"] }
 tpt-math-autodiff = { workspace = true, features = ["tpt-math-autodiff-fwd"] }

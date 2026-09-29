@@ -424,11 +424,43 @@ message.
       previous text had UTF-8 mojibake from the bootstrap and claimed EHL,
       Dowson-Hampton and LuGre friction, none of which exist.
 - [x] `cfg(kani)` declared in the workspace lint config
-- [ ] Advanced coupling follow-up (unblock once the external repo exists):
-      EHL coupling between `tpt-fluids-tribo` and `tpt-fem-elasticity`
-- [ ] Advanced coupling follow-up (unblock once the external repo exists):
-      end-to-end pipe-network diameter optimization via
-      `tpt-systems-optimisation`
+- [ ] Advanced coupling follow-up: EHL coupling between `tpt-fluids-tribo`
+      and `tpt-fem-elasticity`. **Not externally blocked after all** -- see the
+      correction in the spec audit below: `c:\Programming\tpt-fem` contains a
+      local `tpt-fem-elasticity` crate. The remaining obstacle is a policy one
+      (unpublished, path-resolved, and `deny.toml` requires a registry source),
+      not an absent dependency.
+- [x] **End-to-end pipe-network diameter optimization** via
+      `tpt-systems-optimisation` (spec.txt line 176, Phase 3). Done:
+      `tpt-fluids-hydraulic/src/sizing.rs`. The `tpt-opt-core` augmented-Lagrangian
+      solver (`nlp` feature) drives a `NlpProblem` over the diameter vector;
+      cost is `sum L c D^2`, constraints are total and per-pipe head loss, the
+      velocity limit, and both diameter bounds. 13 tests. Converges in ~16 outer
+      iterations and ~1 s on a three-pipe network.
+      Wired as a **git** dependency, per the maintainer's policy decision, pinned
+      to the exact PGP-verified commit `95fbc3f2` rather than `master` so an
+      upstream change cannot alter the solver without appearing in this repo's
+      history. `deny.toml` keeps `unknown-git = "deny"` and adds one named
+      `allow-git` entry, so a *new* git dependency still cannot arrive unnoticed.
+      Two things the tests caught, both worth keeping in mind for any future
+      consumer of an AL solver:
+      - **The upstream solver scores feasibility with `ineq(i, x).max(0.0)`, and
+        Rust's `f64::max` returns the non-`NaN` operand.** So a `NaN` constraint
+        reads as *satisfied*, and the solver reported `converged = true` in one
+        iteration on a decision vector of pure `NaN`. The first run of this
+        module did exactly that. `SizingProblem::guard` maps any `NaN` to
+        `+INFINITY`, putting it on the infeasible side where the penalty can act;
+        the property is pinned by a test that states the upstream scoring rule
+        directly.
+      - **The obvious starting point is the wrong one.** The velocity-limit
+        diameter is infeasible on head loss by construction, and the AL method is
+        a descent method, so it walks further into infeasibility and never
+        recovers -- it returned a network *more expensive* than the one it was
+        given, and a 3 percent shrink was cheaper still. The start is now grown
+        until feasible, which is one cheap loop and puts the search inside the
+        region where descent means something.
+      The physics stays in this crate: the optimiser supplies the constrained
+      solver, never the hydraulics.
 
 ## Spec audit (against `spec.txt`, post-Phase-7)
 
@@ -505,18 +537,64 @@ assumed.
 - [ ] **Elastohydrodynamic lubrication / Dowson-Hampton** (line 116). Left open
       deliberately, and the reason is worth recording rather than glossing.
       `spec.txt` line 116 asks for two things: the coupled Reynolds + elastic
-      deformation solve, and the Dowson-Hampton film-thickness *formulas*. The
-      first is blocked on `tpt-fem-elasticity` (see the `tpt-fem-contact` note
-      above), and the second is a correlation whose coefficients come from a
-      long chain of numerical solutions that this workspace has no way to
-      reproduce. I attempted to source the Hamrock-Dowson coefficients and could
-      not obtain them from any source that renders as text: the Penn State and
-      NASA NTRS PDFs return raw compressed streams, and the MDPI review returns
-      HTTP 403. Writing `2.69 U^0.68 G^0.49 (1 - e^(-0.68k))` from memory would
-      be precisely the failure mode this file is built to prevent -- a precise,
-      plausible, entirely unverified number. It is not shipped. The blocker is
-      therefore "the constants need a citable source", which is a real and
-      answerable one, not "we forgot".
+      deformation solve, and the Dowson-Hampton film-thickness *formulas*. Both
+      are unshipped, but for different reasons, and the deformation side turned
+      out **not** to be blocked on `tpt-fem-elasticity` at all -- see the note
+      below, which supersedes the "blocked on tpt-fem-contact" reasoning.
+      - **The Dowson-Hampton coefficients specifically.** I attempted to source
+        them and could not obtain them from any source that renders as text: the
+        Penn State and NASA NTRS PDFs return raw compressed streams, and the MDPI
+        review returns HTTP 403. Writing
+        `2.69 U^0.68 G^0.49 (1 - e^(-0.68k))` from memory would be precisely the
+        failure mode this file is built to prevent -- a precise, plausible,
+        entirely unverified number.
+      - **The elastic side: attempted, not shipped, and this one is closer.**
+        Line 116's coupling needs the *surface deformation* under film pressure,
+        which is the Cerruti/Boussinesq half-space solution -- an exact analytical
+        result, not an FEM solve, and emphatically not `tpt-fem-contact`. So the
+        "needs `tpt-fem-elasticity`" reasoning above is wrong twice over: the
+        crate exists locally, and this physics does not need it anyway.
+        I built the kernel, with the substitution `s = r sin(phi)` to regularise
+        the integrable `1/sqrt(r^2 - s^2)` singularity, and validated it against
+        Hertz's independent `a^3 / (3 R*)` -- the right check, since the two are
+        derived completely differently.
+        The check earned its keep three times over, and all three failures are
+        worth recording because each is a *finite, plausible* wrong answer:
+        1. My test helper computed `1/((1 - nu^2) E)` -- the compliance -- where
+           `contact_radius` wants `E* = E / (1 - nu^2)`. That gave a 1122 m contact
+           radius for a 1 N load: positive, finite, wrong by 15 orders.
+        2. With that fixed, the kernel agreed with a direct quadrature of the
+           unsubstituted expression to 0.05%, so the substitution was sound.
+        3. But the integrated total approach came out **3.038x** Hertz, and
+           refining the panels did not move it -- a constant error, not a
+           convergence failure. I could not reduce 3.038 to a clean prefactor
+           (it is not pi, 2/pi, pi^2/6, or a simple multiple), which says the
+           `1/r` placement in the closed form or the outer area element is wrong
+           in a way I could not pin down from a text source. Johnson, *Contact
+           Mechanics* (cited throughout the Willert paper I checked) is the
+           authority and is not available as text here.
+        Shipping a deformation kernel off by 3x would be worse than shipping
+        none: an EHL film thickness is the difference between a few nanometres
+        and a micrometre, and a 3x error in the deformation is a 3x error in the
+        film. This is the same standard already applied to the Hamrock-Dowson
+        coefficients above, applied consistently: **a constant I cannot verify is
+        not a constant I ship**, whether it is a correlation coefficient or an
+        integral prefactor. The code was reverted; `tpt-fluids-tribo` is
+        unchanged.
+      - **Johnson located, and it does not help: the book is a scan.** A
+        complete copy of Johnson's *Contact Mechanics* is reachable at
+        `meil.pw.edu.pl/.../Johnson-CONTACTMECHANICS.pdf` (4.99 MB, 462 pages),
+        and the Boussinesq/Cerruti framework was independently corroborated by
+        Willert, arXiv 2108.04617, which cites Johnson throughout. But that PDF is
+        a **scanned image with no text layer** -- the pages are JBIG2 bitmaps --
+        so fetching it returns raw image streams and equation 3.63 cannot be read
+        from it. The same wall as the other PDFs above, and for the same reason.
+        **This is now a resolved question of *access*, not of physics:** the
+        formula is standard, the framework is confirmed, and only a text-rendering
+        copy of eq. 3.63 (or any secondary source that quotes it) is missing.
+        Someone with the book in hand, or a text-layer copy, can close this in
+        minutes. What is *not* going to help is another round of inferring the
+        prefactor from first principles -- that is what produced the 3.038.
 - [x] **LuGre dynamic friction** (line 119) - `tpt-fluids-tribo/src/friction.rs`,
       with Coulomb as the degenerate baseline, the Stribeck steady-state
       curve, the one-state bristle ODE, the relaxation timescale, and a sweep
@@ -581,10 +659,57 @@ assumed.
       `0.5`, so the comparison must be `<=`, not `<`. Both are pinned now. A
       Kani harness would have reported them as counterexamples; without the
       mirrors, nothing here would have been evidence of anything.
-- [ ] **`tpt-systems-optimisation`** (lines 156, 176) - consumer-side, not
-      present as a sibling repo.
+- [ ] **`tpt-systems-optimisation`** (lines 156, 176) - **exists, and the
+      license clears; the blocker is publication, not absence.**
+      The earlier note here said "not present as a sibling repo", which was true
+      of the local filesystem and wrong about the world: it is public at
+      `github.com/tpt-solutions/tpt-systems-optimisation` (11 crates, Rust,
+      pushed 2026-09-04). The family is `tpt-opt-{core, milp, minlp, network, cp,
+      heuristic, multi, robust, decompose, conic, systems}`.
+      **The license is not the obstacle I assumed.** The GitHub *repository* API
+      reports `Apache-2.0`, which would have failed `deny.toml`'s "no
+      Apache-2.0-ONLY anywhere in the graph" rule -- but the repository's own
+      `Cargo.toml` declares `license = "MIT OR Apache-2.0"` and every member
+      crate inherits it via `license.workspace = true`. Dual-licensed, so it
+      passes. I would have rejected this dependency on a stale reading of the
+      GitHub API field.
+      The real blocker: **none of the `tpt-opt-*` crates are on crates.io** (a
+      crates.io search for both `tpt-opt` and `tpt-systems-optimisation` returns
+      zero results), and `deny.toml` sets `sources.unknown-git = "deny"`. So they
+      are consumable only as a git or path dependency.
+      **Resolved by maintainer decision: use a git dependency.** Wired as
+      `tpt-opt-core` with the `nlp` feature, pinned to commit `95fbc3f2`, with a
+      single named `allow-git` entry in `deny.toml` (so `unknown-git` stays
+      `"deny"` for everything else). Shipped as `tpt-fluids-hydraulic/src/sizing.rs`
+      -- see the Phase 3 entry above. For the record: `tpt-opt-core` is
+      `no_std` + `alloc`, depends on published `tpt-math-linalg-sparse` (v0.1.0,
+      confirmed on crates.io, MIT OR Apache-2.0) and optional
+      `tpt-math-optimize-general`, so the optimisation family bridges onto the
+      same `tpt-math` substrate this workspace already uses.
+      **One upstream defect found in the process**, worth reporting to that repo:
+      `solve_nlp` decides feasibility with `prob.ineq(i, x).max(0.0)`, and Rust's
+      `f64::max` returns the non-`NaN` operand, so a `NaN` constraint is scored
+      as *satisfied* and the solver can return `Converged` on a decision vector
+      of pure `NaN`. It is worked around here (`SizingProblem::guard`), but the
+      fix belongs upstream: the max should be `c.max(0.0)` only after an explicit
+      `is_nan` check, or the violation accumulator should treat `NaN` as
+      infeasible.
 - [ ] **EHL coupling with `tpt-fem-elasticity`** (line 153) - see the
       `tpt-fem-contact` note above.
+      **Correction: the blocker is weaker than recorded.** This item was listed as
+      needing "an external repo that does not exist", and that is not quite
+      right. There is a `tpt-fem` repo at `c:\Programming\tpt-fem` containing a
+      `tpt-fem-elasticity` crate (v0.1.0, "Linear elasticity (bar, plane-stress,
+      plane-strain, 3D continuum)"), alongside 25 other crates including
+      `tpt-fem-contact` and `tpt-fem-coupling`. So the dependency exists locally
+      and the coupling is not externally blocked at all.
+      What is still real: it is not published (it resolves through a workspace
+      `path`, not crates.io), and `tpt-fluids`' `deny.toml` requires a registry
+      source, so wiring it in is a deliberate policy decision rather than a
+      one-liner. And the earlier finding stands on its own merits --
+      `tpt-fem-contact` is surface-to-surface contact, which is not the elastic
+      compliance kernel an EHL solution needs, so the useful entry point is
+      `tpt-fem-elasticity` (and possibly `tpt-fem-coupling`), not contact.
 
 ## Kani / WSL: environment status
 
@@ -606,6 +731,24 @@ route, and its state on this machine (Windows 11 Home) is now:
   virtualization component is not enabled, and no distribution is installed.
 - Note that `HypervisorPresent` is `False` and `VirtualizationFirmwareEnabled`
   is `True`, so the hardware supports it; only the OS feature is missing.
+
+### Re-checked after a reboot (2026-09-29)
+
+The machine was rebooted, which **partially** changed the picture and is worth
+recording precisely rather than re-deriving:
+
+- **Progress:** `HypervisorPresent` is now **`True`**, where the pre-reboot
+  reading recorded above was `False`. The hypervisor is up, so the OS-side
+  blocker is closer to cleared than it was.
+- **Still blocked, and this is the part that did not change:** no distribution is
+  installed (`wsl -l -v` reports none, and `wsl --list --online` fails with the
+  "requires internet access to download" error), and
+  `Get-WindowsOptionalFeature` still needs elevation. WSL1 remains unsupported on
+  this build, so there is no lower-privilege fallback.
+- `cargo-kani` is still not installed, as expected.
+
+So the reboot alone was not sufficient. The two remaining steps both need
+elevation, and neither can be done from this non-administrator shell.
 
 ### To finish, in an elevated PowerShell (Run as Administrator), then reboot
 

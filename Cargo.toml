@@ -38,6 +38,23 @@ tpt-math-interpolate = { version = "0.1.0", default-features = false }
 tpt-math-autodiff = { version = "0.1.0", default-features = false }
 tpt-math-signal-fft = { version = "0.1.0", default-features = false }
 
+# `tpt-systems-optimisation` (github.com/tpt-solutions/tpt-systems-optimisation).
+#
+# Git rather than registry, because no `tpt-opt-*` crate is published to
+# crates.io yet. The licence is `MIT OR Apache-2.0` (inherited from the upstream
+# workspace `[workspace.package]` via `license.workspace = true`), so it clears
+# this workspace's no-Apache-2.0-ONLY rule. Note the GitHub *repository* API
+# reports `Apache-2.0`, which is misleading here -- the manifest is the
+# authoritative source and it is dual-licensed.
+#
+# **Pinned to an exact commit**, never to `master`. A moving ref would let an
+# upstream change alter the solver this workspace's network-sizing depends on
+# without appearing in this repository's history, which defeats the point of
+# recording provenance. Bump deliberately, and re-read the API when doing so.
+#
+# 95fbc3f2ae16c313df36cae30fde70d7dbc88dc6 (PGP-verified, 2026-09-04)
+tpt-opt-core = { git = "https://github.com/tpt-solutions/tpt-systems-optimisation.git", rev = "95fbc3f2ae16c313df36cae30fde70d7dbc88dc6", package = "tpt-opt-core" }
+
 # Dev/verification tooling. `proptest` is MIT OR Apache-2.0.
 proptest = "1.11"
 

@@ -63,6 +63,9 @@
 //! - [`differentiable`]: head loss over forward-mode dual numbers, so a
 //!   gradient-based optimiser gets `dh/dD` exactly rather than by finite
 //!   differences.
+//! - [`sizing`]: optimal pipe-network sizing, minimising capital cost subject
+//!   to head and velocity limits through `tpt-systems-optimisation`'s
+//!   constrained nonlinear solver.
 //!
 //! Still to come in this crate: the multi-node MOC network with wave
 //! reflection.
@@ -74,4 +77,5 @@ pub mod friction;
 pub mod gga;
 pub mod hardy_cross;
 pub mod network;
+pub mod sizing;
 pub mod water_hammer;

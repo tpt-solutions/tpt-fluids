@@ -32,5 +32,16 @@ multiple-versions = "warn"
 wildcards = "allow"
 
 [sources]
+# `unknown-git` stays "deny" as the default posture: a git dependency has to be
+# opted into by name, so a new one cannot arrive unnoticed.
 unknown-registry = "deny"
 unknown-git = "deny"
+# The one approved exception. `tpt-opt-core` is consumed from git because the
+# `tpt-opt-*` family is not published to crates.io; the licence is
+# MIT OR Apache-2.0, so the allow-list above already admits it. Listed
+# explicitly so the exception is visible and reviewable rather than a blanket
+# loosening of the policy.
+#
+# The URL must be the repository root -- cargo-deny matches the git URL, and
+# adding a `.git` suffix or a subdirectory here silently fails to match.
+allow-git = ["https://github.com/tpt-solutions/tpt-systems-optimisation"]
