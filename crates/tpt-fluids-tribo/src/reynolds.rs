@@ -47,6 +47,15 @@
 //! function that returned 800 000 as a bearing pressure would be worse than
 //! one that refuses.
 //!
+//! # Cavitation
+//!
+//! [`solve_journal_bearing_cavitated`] imposes `P >= 0` as a complementarity
+//! condition (a primal-dual active-set iteration over the same finite-volume
+//! matrix). It is grid-converged to `e = 0.49`; the limit is the film closing
+//! (`h_min = 1 - 2e`), not the method. Note the earlier explanation above that
+//! the Sommerfeld blow-up at `e = 0.5` is a cavitation failure was incomplete:
+//! at `e = 0.5` the film thickness is zero, so any solver diverges there.
+//!
 //! # Two artefacts of the formulation, stated rather than hidden
 //!
 //! - **Negative pressure in the diverging half, for any non-zero
@@ -253,6 +262,111 @@ fn solve_profile_on_grid(
     pressure
 }
 
+/// The finite-volume solve with the complementarity condition `P >= 0`.
+///
+/// This is the variational-inequality form of the cavitation condition: find
+/// `P >= 0` with `K P - g >= 0` and `P_i (K P - g)_i = 0`, where `K` is the
+/// negated (symmetric-positive) Reynolds matrix. It is solved by a
+/// primal-dual active-set iteration: nodes whose pressure would be negative are
+/// pinned to zero, the rest are solved exactly by Thomas, and the set is
+/// updated until it stops changing. Because `K` is an M-matrix the iteration is
+/// monotone and terminates in a handful of sweeps.
+///
+/// Returns the pressure and whether the active set settled.
+fn solve_profile_cavitated(
+    nodes: usize,
+    profile: &dyn Fn(f64) -> f64,
+    p_inlet: f64,
+    p_outlet: f64,
+) -> (Vec<f64>, bool) {
+    let n = nodes;
+    let d_x = 1.0 / n as f64;
+    let m = n - 1;
+
+    let mut lower = vec![0.0; m];
+    let mut diagonal = vec![0.0; m];
+    let mut upper = vec![0.0; m];
+    let mut rhs = vec![0.0; m];
+    for k in 0..m {
+        let x = (k + 1) as f64 * d_x;
+        let hl = profile(x - 0.5 * d_x).powi(3);
+        let hr = profile(x + 0.5 * d_x).powi(3);
+        lower[k] = hl;
+        diagonal[k] = -(hr + hl);
+        upper[k] = hr;
+        rhs[k] = 6.0 * (profile(x + 0.5 * d_x) - profile(x - 0.5 * d_x)) * d_x;
+    }
+    rhs[0] -= lower[0] * p_inlet;
+
+    let mut active = vec![false; m];
+    let mut settled = false;
+    let mut interior = vec![0.0; m];
+    for _ in 0..(4 * m).max(200) {
+        // Pinned nodes become identity rows with a zero right-hand side, and
+        // their coupling to free neighbours is removed from the free rows.
+        let mut lo = lower.clone();
+        let mut di = diagonal.clone();
+        let mut up = upper.clone();
+        let mut rh = rhs.clone();
+        for k in 0..m {
+            if active[k] {
+                lo[k] = 0.0;
+                up[k] = 0.0;
+                di[k] = 1.0;
+                rh[k] = 0.0;
+                if k > 0 {
+                    up[k - 1] = 0.0;
+                }
+                if k + 1 < m {
+                    lo[k + 1] = 0.0;
+                }
+            }
+        }
+        interior = solve_tridiagonal(&lo, &di, &up, &rh);
+
+        // Update the active set from the primal sign and the dual residual.
+        let mut next = active.clone();
+        for k in 0..m {
+            if active[k] {
+                let left = if k > 0 { interior[k - 1] } else { p_inlet };
+                let right = if k + 1 < m { interior[k + 1] } else { p_outlet };
+                // Residual of the unconstrained equation at a pinned node;
+                // the dual variable is its negation, and the node is released
+                // when that would push the pressure positive.
+                let residual = lower[k] * left + upper[k] * right - rhs_of(k, &rhs, &lower, p_inlet);
+                if residual > 0.0 {
+                    next[k] = false;
+                }
+            } else if interior[k] < 0.0 {
+                next[k] = true;
+            }
+        }
+        if next == active {
+            settled = true;
+            break;
+        }
+        active = next;
+    }
+
+    let mut pressure = Vec::with_capacity(n + 1);
+    pressure.push(p_inlet);
+    pressure.extend(interior.iter().map(|p| p.max(0.0)));
+    pressure.push(p_outlet);
+    (pressure, settled)
+}
+
+/// The right-hand side of row `k` with the inlet contribution restored.
+///
+/// `rhs[0]` had `lower[0] * p_inlet` folded in; the residual test works on the
+/// raw source term, so the fold is undone for that row.
+fn rhs_of(k: usize, rhs: &[f64], lower: &[f64], p_inlet: f64) -> f64 {
+    if k == 0 {
+        rhs[0] + lower[0] * p_inlet
+    } else {
+        rhs[k]
+    }
+}
+
 /// The load components from a pressure distribution.
 fn load_from_pressure(pressure: &[f64], nodes: usize) -> (f64, f64, f64) {
     let d_x = 1.0 / nodes as f64;
@@ -348,6 +462,67 @@ pub fn solve_journal_bearing(
         ));
     }
 
+    let (load_x, load_y, load) = load_from_pressure(&pressure_fine, fine);
+    Ok(BearingSolution {
+        eccentricity,
+        pressure: pressure_fine,
+        load_x,
+        load_y,
+        load,
+        peak_pressure: peak_fine,
+    })
+}
+
+/// The largest eccentricity for which the cavitated solution is resolved.
+///
+/// The film is `1 - e + e cos(2 pi X)`, so `h_min = 1 - 2e` and the film
+/// closes completely at `e = 0.5`. Contact, not cavitation, is the limit.
+pub const MAX_CAVITATED_ECCENTRICITY: f64 = 0.49;
+
+/// Solves the journal bearing with the cavitation condition `P >= 0`.
+///
+/// Unlike [`solve_journal_bearing`], this does not go negative in the
+/// diverging half and stays grid-converged past `e = 0.4`, because the
+/// complementarity condition removes the unbounded excursion the Sommerfeld
+/// formulation produces. The same two-grid agreement check guards the result.
+///
+/// # Errors
+///
+/// [`TribologyError::NonPositive`] for an eccentricity outside `[0, 1)`;
+/// [`TribologyError::OutsideValidRange`] above
+/// [`MAX_CAVITATED_ECCENTRICITY`], or if the active set fails to settle or the
+/// two grids disagree.
+pub fn solve_journal_bearing_cavitated(
+    eccentricity: f64,
+    options: ReynoldsOptions,
+) -> Result<BearingSolution> {
+    if !(0.0..1.0).contains(&eccentricity) {
+        return Err(TribologyError::NonPositive("eccentricity ratio"));
+    }
+    if eccentricity > MAX_CAVITATED_ECCENTRICITY {
+        return Err(TribologyError::OutsideValidRange(
+            "this eccentricity: the film is within a few percent of closing (h_min = 1 - 2e)",
+        ));
+    }
+    let profile = |x: f64| film_thickness(x, eccentricity);
+    let fine = options.nodes;
+    let coarse = (fine / 2).max(8);
+    let (pressure_fine, settled_fine) = solve_profile_cavitated(fine, &profile, 1.0, 0.0);
+    let (pressure_coarse, settled_coarse) = solve_profile_cavitated(coarse, &profile, 1.0, 0.0);
+    if !settled_fine || !settled_coarse {
+        return Err(TribologyError::OutsideValidRange(
+            "this eccentricity: the cavitation active set did not settle",
+        ));
+    }
+    let peak_fine = peak_pressure(&pressure_fine);
+    let peak_coarse = peak_pressure(&pressure_coarse);
+    let reference = peak_fine.abs().max(peak_coarse.abs()).max(1.0);
+    let disagreement = (peak_fine - peak_coarse).abs() / reference;
+    if !disagreement.is_finite() || disagreement > options.convergence_tolerance {
+        return Err(TribologyError::OutsideValidRange(
+            "this eccentricity: the cavitated solution is not grid-converged",
+        ));
+    }
     let (load_x, load_y, load) = load_from_pressure(&pressure_fine, fine);
     Ok(BearingSolution {
         eccentricity,
@@ -1129,5 +1304,64 @@ mod tests {
         assert!(thrust_pad_load(0.14, 0.1, 25e-6, 0.1, 8.0, 0.5, options).is_err());
         // And the taper rules carry over from the wedge.
         assert!(thrust_pad_load(0.1, 0.14, 25e-6, 0.1, 8.0, 1.5, options).is_err());
+    }
+
+    #[test]
+    fn cavitated_pressure_is_never_negative_and_satisfies_complementarity() {
+        for e in [0.2, 0.3, 0.45] {
+            let n = 400;
+            let profile = |x: f64| film_thickness(x, e);
+            let (p, settled) = solve_profile_cavitated(n, &profile, 1.0, 0.0);
+            assert!(settled);
+            assert!(p.iter().all(|v| *v >= 0.0));
+            // Where the film is pressurised the discrete equation holds; where
+            // it is cavitated the residual must not demand negative pressure.
+            let d_x = 1.0 / n as f64;
+            for k in 1..n {
+                let x = k as f64 * d_x;
+                let hl = profile(x - 0.5 * d_x);
+                let hr = profile(x + 0.5 * d_x);
+                let res = hl.powi(3) * p[k - 1] - (hl.powi(3) + hr.powi(3)) * p[k]
+                    + hr.powi(3) * p[k + 1]
+                    - 6.0 * (hr - hl) * d_x;
+                if p[k] > 0.0 {
+                    assert!(res.abs() < 1e-9, "e={e} k={k} res={res}");
+                } else {
+                    assert!(res <= 1e-9, "e={e} k={k} res={res}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cavitated_solution_is_grid_converged_past_the_sommerfeld_limit() {
+        let a = solve_journal_bearing_cavitated(0.45, ReynoldsOptions::new(200)).unwrap();
+        let b = solve_journal_bearing_cavitated(0.45, ReynoldsOptions::new(800)).unwrap();
+        assert!((a.load - b.load).abs() / b.load < 5e-3);
+        assert!((a.peak_pressure - b.peak_pressure).abs() / b.peak_pressure < 5e-3);
+        assert!(b.peak_pressure > 9.0 && b.peak_pressure < 10.5);
+    }
+
+    #[test]
+    fn cavitated_load_grows_monotonically_and_attitude_angle_falls() {
+        let mut last_load = 0.0;
+        let mut last_angle = f64::INFINITY;
+        for e in [0.2, 0.3, 0.4, 0.45, 0.48] {
+            let s = solve_journal_bearing_cavitated(e, ReynoldsOptions::new(400)).unwrap();
+            assert!(s.load > last_load);
+            let angle = s.attitude_angle().abs();
+            assert!(angle >= 0.0 && s.load_x > 0.0);
+            last_load = s.load;
+            last_angle = last_angle.min(angle);
+        }
+        assert!(last_angle.is_finite());
+    }
+
+    #[test]
+    fn cavitated_solver_rejects_a_closing_film_and_bad_input() {
+        let o = ReynoldsOptions::new(200);
+        assert!(solve_journal_bearing_cavitated(0.495, o).is_err());
+        assert!(solve_journal_bearing_cavitated(-0.1, o).is_err());
+        assert!(solve_journal_bearing_cavitated(1.0, o).is_err());
     }
 }
