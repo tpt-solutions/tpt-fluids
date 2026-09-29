@@ -26,5 +26,5 @@ pub mod conservation;
 #[cfg(test)]
 pub mod invariants;
 
-#[cfg(all(test, feature = "kani"))]
+#[cfg(all(feature = "kani", any(test, kani)))]
 mod kani_proofs;
