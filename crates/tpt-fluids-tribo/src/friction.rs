@@ -36,6 +36,7 @@
 //! The fourth is the reason to prefer it over interpolating the Stribeck
 //! curve, and it is the property the tests here check hardest.
 
+use alloc::vec::Vec;
 use tpt_fluids_core::math;
 
 use crate::error::{Result, TribologyError};

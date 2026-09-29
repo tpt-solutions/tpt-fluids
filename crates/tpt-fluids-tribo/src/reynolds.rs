@@ -81,6 +81,8 @@
 //! what a designer sizes against. Eccentricity above about 0.7 means the film
 //! has collapsed and the bearing is failing, not that the answer is hard.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use tpt_fluids_core::math;
 
 use crate::error::{Result, TribologyError};
