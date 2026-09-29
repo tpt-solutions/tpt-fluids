@@ -525,7 +525,18 @@ assumed.
       value. Fixing it took the peak from 1.8195 to the correct
       grid-independent 1.81954 and made the solver converge.
 
-      **Still open:** Reynolds' supplementary cavitation condition for
+      **Closed (2026-09-29): cavitation via complementarity.**
+      `solve_journal_bearing_cavitated` imposes `P >= 0` with a primal-dual
+      active-set iteration over the same matrix (the M-matrix makes it
+      monotone). Grid-converged to `e = 0.49` (peak 33.5, load 3.437 at every
+      resolution for `e = 0.48`); pressure never negative; complementarity
+      checked residual-by-residual in a test. **Correction to the text below:**
+      the 8e5 blow-up at `e = 0.5` was partly the film closing (`h_min = 1 - 2e
+      = 0`), which no solver survives -- the limit is now
+      `MAX_CAVITATED_ECCENTRICITY = 0.49`, contact rather than method. The
+      Sommerfeld solve did not actually refuse at 0.45.
+      Kani equilibrium harnesses are unaffected (they concern the load direction).
+      *Superseded note:* Reynolds' supplementary cavitation condition for
       `e > 0.4`. A post-hoc "find where P < 0" loop cannot work, because the
       plain solve spikes *positive* before it ever goes negative. A
       pivot/bubble method during elimination was tried and detects some
