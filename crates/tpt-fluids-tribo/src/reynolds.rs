@@ -333,7 +333,8 @@ fn solve_profile_cavitated(
                 // Residual of the unconstrained equation at a pinned node;
                 // the dual variable is its negation, and the node is released
                 // when that would push the pressure positive.
-                let residual = lower[k] * left + upper[k] * right - rhs_of(k, &rhs, &lower, p_inlet);
+                let residual =
+                    lower[k] * left + upper[k] * right - rhs_of(k, &rhs, &lower, p_inlet);
                 if residual > 0.0 {
                     next[k] = false;
                 }
