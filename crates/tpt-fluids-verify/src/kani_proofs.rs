@@ -254,7 +254,7 @@ kani_proof! {
         }
         // The solver's own step is the limit, so it must be accepted: this is
         // the case a too-strict tolerance would break.
-        kani::assert(validate_courant(&branch, limit).is_ok());
+        kani::assert(validate_courant(&branch, limit).is_ok(), "the solver's own limit step was rejected");
     }
 
     /// A valve slamming shut on a frictionless pipe must produce exactly the
@@ -275,7 +275,7 @@ kani_proof! {
         // and equal to a Q0 / g.
         let expected = momentum_coefficient(wave_speed) * flow;
         kani::assert(rise > 0.0, "a full stop must raise the head, never lower it");
-        kani::assert((rise - expected).abs() / expected < 1.0e-12);
+        kani::assert((rise - expected).abs() / expected < 1.0e-12, "the head rise must match the Joukowsky relation");
     }
 
     /// The velocity and length types must not admit `NaN` through the
@@ -285,7 +285,7 @@ kani_proof! {
         let v: f64 = kani::any();
         kani::assume(v > 0.0 && v < 1.0e6);
         let vel = Velocity::new(v);
-        kani::assert(vel.value().is_finite());
+        kani::assert(vel.value().is_finite(), "a finite velocity must stay finite");
     }
 
     /// The Reynolds load direction must be a function of the wrapped position.
@@ -359,7 +359,7 @@ kani_proof! {
         kani::assert(h_min > 0.0, "the film collapsed inside the resolved regime");
         kani::assert(h_min <= 1.0, "the film exceeded the full clearance");
         // And it is exactly the linear relation the documentation states.
-        kani::assert((h_min - (1.0 - 2.0 * eccentricity)).abs() < 1.0e-12);
+        kani::assert((h_min - (1.0 - 2.0 * eccentricity)).abs() < 1.0e-12, "the minimum film must be linear in eccentricity");
     }
 }
 
@@ -368,7 +368,10 @@ kani_proof! {
 /// always the more negative one.
 #[cfg(kani)]
 fn assert_more_negative(a: f64, b: f64) {
-    kani::assert(a.is_finite() && b.is_finite());
+    kani::assert(
+        a.is_finite() && b.is_finite(),
+        "the corrections being compared must be finite",
+    );
     kani::assert(
         a <= b,
         "the larger demand must give the more negative correction",
