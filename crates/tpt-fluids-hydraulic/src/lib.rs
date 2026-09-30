@@ -21,29 +21,29 @@
 //! - [`gga`]: node-head Newton-Raphson solver (Global Gradient Algorithm), with
 //!   a backtracking line search.
 //!
-//! ## Known limitation
+//! ## Status of the two solvers
 //!
-//! ### Status of the two solvers
-//!
-//! Both are implemented and exercised, with one honest caveat each. Two tests
-//! are `#[ignore]`d, both in [`hardy_cross`], both for the same reason.
+//! Both are implemented and exercised, with one honest caveat each. No tests
+//! are `#[ignore]`d.
 //!
 //! - [`gga`] is the **fully general** solver. It handles multiple sources,
-//!   looped networks, and trees, and is the one to reach for. Two of its
+//!   looped networks, and trees, and it is the one to reach for. Two of its
 //!   guarantees are tested directly: the analytic conductance is checked
 //!   against a finite-difference estimate, and its solution on a looped
 //!   network is checked against an independently derived reference. A
 //!   network with no source at all is genuinely undetermined (heads are
 //!   defined only up to a constant) and is rejected rather than answered with
 //!   an arbitrary datum.
-//! - [`hardy_cross`] is correct for single-source networks, including parallel
-//!   pipe pairs, and its flow split is cross-checked against the GGA on those.
-//!   It does **not** converge on networks with several sources *and* several
-//!   independent loops: the method is only linearly convergent and its rate
-//!   collapses under that much resistance contrast. The GGA solves the same
-//!   networks in about nine iterations, so the networks are well posed and
-//!   this is a limitation of Hardy Cross, not of the model. Two tests are
-//!   `#[ignore]`d for this reason rather than deleted.
+//! - [`hardy_cross`] now closes **every** loop to the requested tolerance,
+//!   including the multi-source, multi-loop networks it previously stalled on.
+//!   The correction solves the loop equation exactly instead of freezing the
+//!   loop resistance and taking one step, which is what removed the stall. Its
+//!   residual limitation is different and is stated in that module: loop
+//!   correction cannot choose between the several flow fields that satisfy its
+//!   own equations, so on a multi-source network it may converge to a
+//!   loop-consistent answer that is not the physical one. The GGA has a
+//!   principled reason to select the physical branch. Use the GGA when the
+//!   values matter.
 //!
 //! One subtlety worth knowing when reading [`network::LoopTerm`]: a link
 //! traversal always runs in the link's own upstream-to-downstream
@@ -52,9 +52,11 @@
 //! correction depends on it.
 //!
 //! - [`water_hammer`]: water-hammer analytics (wave speed, Joukowsky rise,
-//!   critical closure time, Courant step, column separation) and a
+//!   critical closure time, Courant step, column separation) plus a
 //!   Method of Characteristics solver for the canonical reservoir-fed pipe
-//!   under a prescribed valve closure.
+//!   under a prescribed valve closure, and a **multi-node** solver
+//!   ([`MocNetwork`](water_hammer::MocNetwork)) that discretises every
+//!   branch into reaches so a wavefront travels, reflects and returns.
 //!
 //! - [`components`]: valves from `Cv` or a `K` coefficient, pump and turbine
 //!   characteristic curves with three-point fitting, the four turbine quadrants,
@@ -62,13 +64,17 @@
 //!
 //! - [`differentiable`]: head loss over forward-mode dual numbers, so a
 //!   gradient-based optimiser gets `dh/dD` exactly rather than by finite
-//!   differences.
+//!   differences. The gradient is exact for *every* correlation, Colebrook-White
+//!   included: the implicit equation is handled by running its own iteration over
+//!   duals, so no correlation needs a difference quotient.
 //! - [`sizing`]: optimal pipe-network sizing, minimising capital cost subject
 //!   to head and velocity limits through `tpt-systems-optimisation`'s
 //!   constrained nonlinear solver.
 //!
-//! Still to come in this crate: the multi-node MOC network with wave
-//! reflection.
+//! Still to come in this crate: nothing in the MOC formulation. Unsteady
+//! friction is per-branch, derived from each pipe's own `2 L / (g |V|)` by
+//! `with_derived_friction_lag`, and the single-reach solver reproduces the
+//! friction rise integral `rise = (a/g) Q0 - (2/3) R Q0^{3/2}` in closed form.
 
 pub mod components;
 pub mod differentiable;

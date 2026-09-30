@@ -1,15 +1,18 @@
 //! Verification harnesses for the `tpt-fluids` workspace.
 //!
-//! - [`invariants`]: proptest strategies asserting the dimensional, monotonic,
+//! - `invariants`: proptest strategies asserting the dimensional, monotonic,
 //!   and limit properties that every correlation must satisfy for *all*
 //!   inputs, not just the ones a unit test thought to check.
-//! - [`kani_proofs`]: Kani harnesses proving the solvers cannot produce a
+//! - `kani_proofs`: Kani harnesses proving the solvers cannot produce a
 //!   `NaN`, a negative head loss, or a non-finite pressure on any input.
 //!
 //! Both modules are `cfg(test)`. That is deliberate rather than incidental:
 //! everything here is a property test or a proof harness, and `#[test]`
 //! functions are stripped from a non-test build, which would leave this
-//! crate's imports unused on every ordinary `cargo build`.
+//! crate's imports unused on every ordinary `cargo build`. A consequence worth
+//! knowing is that intra-doc links to them cannot resolve, because they do not
+//! exist in a documentation build either -- hence the plain code spans above
+//! rather than links that would warn.
 //!
 //! # A note on what the Kani harnesses are worth
 //!

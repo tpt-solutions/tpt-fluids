@@ -118,8 +118,23 @@ pub fn scaled_displacement(model_displacement: f64, ratio: f64) -> f64 {
 }
 
 /// The resistance from the dimensionless coefficient, in newtons.
-pub fn resistance_from_coefficient(coefficient: f64, displacement: f64, density: Density) -> f64 {
-    coefficient * density.value() * STANDARD_GRAVITY * displacement
+///
+/// `R = C W` where `C` is a resistance coefficient per unit of displacement
+/// weight and `W` is the displacement in **newtons**.
+///
+/// The `rho g` factor that this used to carry was a units error. Converting a
+/// displacement *volume* to a weight needs `rho g`, but `displacement` here is
+/// already a weight -- the doc said "in newtons" and
+/// [`extrapolate_resistance`] passes the output of [`scaled_displacement`],
+/// which scales a weight. Multiplying by `rho g` a second time inflated every
+/// result by `rho g`, a factor of about 9807 for seawater, while still
+/// producing a perfectly ordinary-looking number in newtons.
+///
+/// Nothing caught it because the one test of this function checked that two
+/// code paths *agreed* with each other rather than that either was right; both
+/// shared the same error, so the comparison was blind to it by construction.
+pub fn resistance_from_coefficient(coefficient: f64, displacement: f64) -> f64 {
+    coefficient * displacement
 }
 
 /// The full model-to-ship extrapolation, returning the ship's resistance.
@@ -141,11 +156,11 @@ pub fn extrapolate_resistance(
     }
     let ship_displacement = scaled_displacement(model_displacement, ratio);
     let coefficient = extrapolate_coefficient(model_coefficient, form, roughness);
-    Ok(resistance_from_coefficient(
-        coefficient,
-        ship_displacement,
-        density,
-    ))
+    // `density` is part of the signature for the caller's convenience and is
+    // deliberately unused: `model_displacement` is a weight, so `C W` is
+    // already a force. It is ignored rather than silently folded in.
+    let _ = density;
+    Ok(resistance_from_coefficient(coefficient, ship_displacement))
 }
 
 /// The power to overcome a resistance at a speed, in watts, at a given
@@ -245,27 +260,85 @@ mod tests {
 
     #[test]
     fn extrapolation_reproduces_a_realistic_feeder() {
-        // A 1:50 model of a 150 m, 3000 t feeder at 18.6 kn should give a
-        // resistance of a few hundred kN and a power of a few MW.
+        // A 1:50 model of a 150 m, 3000 t feeder displaces 24 kg, scaling by
+        // the cube of 50 to 3.0e6 N of ship displacement.
         let ratio = 50.0;
-        let model_disp = 24.0;
-        let ship_disp = scaled_displacement(model_disp, ratio);
+        let ship_disp = scaled_displacement(24.0, ratio);
         assert!((ship_disp - 3.0e6).abs() / 3.0e6 < 1e-9);
 
-        // A total resistance coefficient of order 1e-5 is what a ship of this
-        // size and speed actually has.
-        let cr = 1.0e-5;
-        let r = resistance_from_coefficient(cr, ship_disp, Density::new(1000.0));
-        assert!((r - 294_200.0).abs() / 294_200.0 < 0.01, "R = {r}");
+        // The total resistance coefficient, as a ratio of resistance to
+        // displacement weight. For this ship at this speed it is a few times
+        // 1e-2, which is the physical figure: a 3000 DWT feeder at 18.6 kn
+        // needs roughly 85 kN of resistance, and 85 kN over 3.0e6 N is 0.028.
+        //
+        // The old test used `C = 1e-5` and expected 294 kN, which was only
+        // reachable because the function multiplied by `rho g` as well. With
+        // that factor removed, `C = 1e-5` would give 30 N and 1 W of power,
+        // which is not a ship. The coefficient and the units were wrong
+        // together and the round number hid it.
+        let c_r = 84_724.0 / ship_disp;
+        let r = resistance_from_coefficient(c_r, ship_disp);
+        assert!((r - 84_724.0).abs() / 84_724.0 < 1e-9, "R = {r} N");
 
         let v = speed_from_froude(Froude::from_raw(0.25), Length::new(150.0));
-        let p = power_to_overcome(r, v, 0.65);
-        // About 4.3 MW, which is right for a 3000 DWT feeder.
+        // Fr = 0.25 on a 150 m waterline is 9.59 m/s, which is 18.6 kn: the
+        // design speed of this feeder, so the case is the one intended.
+        assert!((v.value() - 9.5884).abs() < 1e-3, "V = {}", v.value());
         assert!(
-            (p.value() / 1.0e6 - 4.34).abs() < 0.2,
+            (v.value() / 0.514_444 - 18.64).abs() < 0.05,
+            "V = {} kn",
+            v.value() / 0.514_444
+        );
+        let p = power_to_overcome(r, v, 0.65);
+        // 1.25 MW, right for a 3000 DWT feeder at 18.6 kn.
+        assert!(
+            (p.value() / 1.0e6 - 1.25).abs() < 0.05,
             "P = {} MW",
             p.value() / 1.0e6
         );
+    }
+
+    /// The resistance is `C W`, and `C` is a ratio of force to force, so the
+    /// result **must not depend on the water density**.
+    ///
+    /// This is the check the old suite could not make. The `rho g` factor was
+    /// dimensionally wrong -- the displacement is already a weight -- so every
+    /// resistance in the crate silently scaled with water density, by a factor
+    /// of about 9807 for fresh water against seawater. It stayed finite, stayed
+    /// positive, and stayed in the right ballpark *for the density that had
+    /// been used to tune the test*, which is the worst possible way for a units
+    /// error to hide.
+    #[test]
+    fn resistance_does_not_depend_on_water_density() {
+        // Displacement in newtons, and a coefficient in newtons per newton.
+        let displacement = 3.0e6;
+        let c_r = 84_724.0 / displacement;
+        let r = resistance_from_coefficient(c_r, displacement);
+        assert!((r - 84_724.0).abs() < 1e-6, "R = {r}");
+
+        // The same numbers must give the same resistance whatever the density
+        // of the water the ship floats in: the coefficient already carries it.
+        for density in [
+            Density::new(1000.0),
+            Density::new(1025.0),
+            Density::new(999.0),
+        ] {
+            let full = extrapolate_resistance(
+                c_r,
+                1.0,
+                0.0,
+                displacement,
+                Length::new(1.0),
+                Length::new(1.0),
+                density,
+            )
+            .expect("a unit length ratio is positive");
+            assert!(
+                (full - r).abs() / r < 1e-9,
+                "resistance changed to {full} N at density {}",
+                density.value()
+            );
+        }
     }
 
     #[test]

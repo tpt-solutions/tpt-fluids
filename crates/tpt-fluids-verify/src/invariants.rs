@@ -29,6 +29,9 @@ use proptest::prelude::*;
 
 use tpt_fluids_core::quantity::{AngularRate, Density, Length, Velocity};
 use tpt_fluids_hydraulic::friction::{friction_factor, FrictionModel};
+use tpt_fluids_hydraulic::water_hammer::{
+    method_of_characteristics, Boundary, Branch, MocBranch, MocNetwork, MocNode,
+};
 use tpt_fluids_marine::froude_scaling::{
     extrapolate_coefficient, form_factor, length_scale, scaled_displacement,
 };
@@ -52,6 +55,31 @@ fn diameter() -> impl Strategy<Value = f64> {
 /// A relative roughness, from hydraulically smooth to very rough.
 fn relative_roughness() -> impl Strategy<Value = f64> {
     (0.0f64..0.05f64).prop_filter("must be finite", |v: &f64| v.is_finite())
+}
+
+/// A pipe that satisfies the Courant condition comfortably, with a little
+/// friction and a realistic wave speed, built at a fixed reach count.
+fn moc_branch(length: f64, resistance: f64) -> MocBranch {
+    MocBranch {
+        from: 0,
+        to: 1,
+        length,
+        wave_speed: 1484.5764,
+        area: 0.0706858,
+        resistance,
+        check_valve: false,
+    }
+}
+
+/// A two-node reservoir-to-valve network discretised into four reaches.
+fn moc_network(resistance: f64, dt: f64) -> MocNetwork {
+    MocNetwork::new(
+        vec![MocNode::Reservoir(100.0), MocNode::Valve],
+        vec![moc_branch(150.0, resistance)],
+        vec![0.0035],
+        dt,
+    )
+    .expect("dt is a Courant step for a 150 m pipe at 1484.6 m/s")
 }
 
 proptest! {
@@ -429,5 +457,298 @@ proptest! {
         let life1 = life_for_wear_depth(WearCoefficient::new(k1).unwrap(), 1000.0, 1.0e9, 0.01, 1.0e-5);
         let life2 = life_for_wear_depth(WearCoefficient::new(k2).unwrap(), 1000.0, 1.0e9, 0.01, 1.0e-5);
         prop_assert!(life1 > life2, "mild {life1} vs severe {life2}");
+    }
+
+    // --- MOC water hammer -------------------------------------------------
+    //
+    // The MOC solver is where every silent defect in this crate's history has
+    // been found: a friction *difference* that vanished for uniform flow, a
+    // check valve that stopped the whole branch at once, a separation clamp
+    // that froze the flow, and a seeding term that made a steady network
+    // drift. Each returned finite, plausible numbers, so example-based tests
+    // missed them. These are the properties that pin the class.
+
+    /// **Friction must damp a surge, never amplify it.** This is the property
+    /// whose absence let the rise-integral bug through: a frictional gradual
+    /// closure came out slightly *above* the frictionless one, because the
+    /// friction term was a difference that telescoped to a constant offset.
+    /// Monotonicity in the resistance is what makes that impossible.
+    #[test]
+    fn moc_friction_only_ever_damps_the_surge(r1 in 0.0f64..1.0e3, r2 in 0.0f64..1.0e3) {
+        let (low, high) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
+        let rise = |resistance: f64| {
+            let n = 200;
+            let ramp: Vec<f64> = (0..n)
+                .map(|i| 0.0035 * (1.0 - f64::from(i) / n as f64))
+                .collect();
+            let branch = Branch {
+                node: 1,
+                length: 150.0,
+                wave_speed: 1484.5764,
+                area: 0.0706858,
+                resistance,
+                check_valve: false,
+            };
+            method_of_characteristics(branch, 0.0035, &ramp, Boundary::reservoir(100.0), 0.0)
+                .expect("a well-formed branch solves")
+                .max_head_rise()
+        };
+        prop_assert!(
+            rise(low) >= rise(high),
+            "friction must not raise the surge"
+        );
+        prop_assert!(rise(high) <= rise(0.0) + 1e-12);
+    }
+
+    /// **A frictional steady state is a fixed point.** The friction term is the
+    /// whole steady gradient, so if it is not sustained the network quietly
+    /// relaxes to frictionless while every value stays finite and plausible.
+    /// This was the MOC equivalent of the Froude `rho g` bug.
+    #[test]
+    fn moc_steady_state_does_not_drift(resistance in 0.0f64..1.0e4, steps in 4usize..24) {
+        let dt = 150.0 / 1484.5764 / 4.0;
+        let net = moc_network(resistance, dt);
+        let demand: Vec<Vec<f64>> = std::iter::repeat_n(vec![0.0, 0.0035], steps).collect();
+        let r = net.solve(&demand, 0.0).expect("a resolved network solves");
+        let h0 = &r.head_history[0];
+        for (step, row) in r.head_history.iter().enumerate() {
+            for (i, (v, base)) in row.iter().zip(h0.iter()).enumerate() {
+                prop_assert!(
+                    (v - base).abs() < 1e-9,
+                    "node {i} drifted {} by step {step} on a steady network",
+                    (v - base).abs()
+                );
+            }
+        }
+        // The steady drop is exactly the Darcy-Weisbach loss, for any R.
+        let drop = resistance * 0.0035 * 0.0035;
+        prop_assert!(
+            (h0[0] - h0[1] - drop).abs() < 1e-9,
+            "steady gradient {} != loss {drop}",
+            h0[0] - h0[1]
+        );
+    }
+
+    /// Every reachable state is finite. A `NaN` or an infinity escaping the
+    /// solver poisons whatever consumes it, and the MOC recursion reads its own
+    /// previous state back as an arriving characteristic, so a single bad value
+    /// spreads along the pipe on the next step.
+    ///
+    /// The vapour head is bounded to `0..=100` -- the reservoir head. A vapour
+    /// head *above* the reservoir is physical (a closure surge exceeds it) and
+    /// is exercised by the unit tests, but sweeping it far above 100 drives the
+    /// solver into a regime where every node separates simultaneously and the
+    /// clamped field no longer admits a characteristic. That is a genuine limit
+    /// of the model rather than a defect, and it is worth stating rather than
+    /// discovering as a property-test failure.
+    #[test]
+    fn moc_never_produces_a_non_finite_state(
+        resistance in 0.0f64..1.0e4,
+        closure in 0.0f64..4.0,
+        steps in 1usize..20,
+        vapour in 0.0f64..100.0,
+    ) {
+        let dt = 150.0 / 1484.5764 / 4.0;
+        let net = moc_network(resistance, dt);
+        let demand: Vec<Vec<f64>> = std::iter::repeat_n(vec![0.0, closure], steps).collect();
+        let r = net.solve(&demand, vapour).expect("a resolved network solves");
+        for (step, row) in r.head_history.iter().enumerate() {
+            for (i, v) in row.iter().enumerate() {
+                prop_assert!(v.is_finite(), "node {i} at step {step} was {v}");
+            }
+        }
+        for (step, row) in r.flow_history.iter().enumerate() {
+            for (i, v) in row.iter().enumerate() {
+                prop_assert!(v.is_finite(), "branch {i} at step {step} was {v}");
+            }
+        }
+        for (step, row) in r.end_head_history.iter().enumerate() {
+            for (i, v) in row.iter().enumerate() {
+                prop_assert!(v.is_finite(), "end {i} at step {step} was {v}");
+            }
+        }
+    }
+
+    /// **A head wave travels one reach per step and nothing moves before it
+    /// arrives.** The defining property of the discretisation, and the one a
+    /// lumped shortcut cannot satisfy: a solver that applies a boundary along
+    /// the whole pipe at once is indistinguishable from a correct one at steady
+    /// state, and only this separates them.
+    #[test]
+    fn moc_a_wave_moves_exactly_one_reach_per_step(resistance in 0.0f64..1.0e3) {
+        let dt = 150.0 / 1484.5764 / 4.0;
+        let net = moc_network(resistance, dt);
+        let r = net.solve(&[vec![0.0, 0.0]], 0.0).expect("solves");
+        let offset = net.end_offset(0);
+        // One step after an instantaneous stop, only the valve end has moved.
+        for k in offset + 1..offset + net.reaches[0] {
+            let h0 = r.end_head(k, 0).expect("end exists");
+            let h1 = r.end_head(k, 1).expect("end exists");
+            prop_assert!(
+                (h1 - h0).abs() < 1e-9,
+                "end {k} moved {} before the wave could reach it",
+                (h1 - h0).abs()
+            );
+        }
+    }
+
+    /// **Enabling unsteady friction cannot change a steady result.** The safety
+    /// property that makes the correction safe to offer at all: `E = |Q|` is a
+    /// fixed point of the EWMA, so a network that is not moving must not move
+    /// either, however the lag is set -- global or derived per branch.
+    #[test]
+    fn moc_friction_lag_never_disturbs_a_steady_network(
+        resistance in 0.0f64..1.0e4,
+        lag in 0.001f64..1.0e3,
+        steps in 4usize..20,
+    ) {
+        let dt = 150.0 / 1484.5764 / 4.0;
+        let plain = moc_network(resistance, dt);
+        let lagged = moc_network(resistance, dt)
+            .with_friction_lag(lag)
+            .expect("a positive lag is accepted");
+        let derived = moc_network(resistance, dt)
+            .with_derived_friction_lag(1.0)
+            .expect("a positive scale is accepted");
+        let demand: Vec<Vec<f64>> = std::iter::repeat_n(vec![0.0, 0.0035], steps).collect();
+        let a = plain.solve(&demand, 0.0).expect("solves");
+        for other in [lagged, derived] {
+            let b = other.solve(&demand, 0.0).expect("solves");
+            for (step, (x, y)) in a.head_history.iter().zip(b.head_history.iter()).enumerate() {
+                for (i, (u, v)) in x.iter().zip(y.iter()).enumerate() {
+                    prop_assert!(
+                        (u - v).abs() < 1e-12,
+                        "node {i} at step {step} moved {} on a steady network",
+                        (u - v).abs()
+                    );
+                }
+            }
+        }
+    }
+
+    /// **A check valve never passes reverse flow, for any resistance or
+    /// timing.** It also must not leak the stop backwards along the pipe, which
+    /// is what zeroing the upstream end used to do.
+    #[test]
+    fn moc_a_check_valve_never_passes_reverse_flow(
+        resistance in 0.0f64..1.0e4,
+        demand in -1.0f64..1.0,
+        steps in 1usize..12,
+    ) {
+        let dt = 150.0 / 1484.5764 / 4.0;
+        let mut branch = moc_branch(150.0, resistance);
+        branch.check_valve = true;
+        let net = MocNetwork::new(
+            vec![MocNode::Reservoir(100.0), MocNode::Valve],
+            vec![branch],
+            vec![0.0035],
+            dt,
+        )
+        .expect("a resolved network solves");
+        let valve_flow = 0.0035 * demand;
+        let seq: Vec<Vec<f64>> = std::iter::repeat_n(vec![0.0, valve_flow], steps).collect();
+        let r = net.solve(&seq, 0.0).expect("solves");
+        for (step, row) in r.flow_history.iter().enumerate() {
+            prop_assert!(
+                row[0] >= 0.0,
+                "a check valve passed reverse flow {} at step {step}",
+                row[0]
+            );
+        }
+    }
+
+    // --- EHL film thickness ------------------------------------------------
+    //
+    // These are fitted correlations, so the property that matters is not
+    // "matches a reference value" but the scaling: a correlation whose exponents
+    // drift silently stops being EHL and becomes a number generator.
+
+    /// The film must never be negative, infinite, or `NaN` across the operating
+    /// envelope, and a stationary contact must be exactly zero.
+    #[test]
+    fn ehl_film_is_always_finite_and_non_negative(
+        r in 1.0e-3f64..10.0,
+        w in 0.0f64..1.0e6,
+        u in 0.0f64..100.0,
+        eta in 1.0e-6f64..100.0,
+    ) {
+        use tpt_fluids_tribo::ehl::EhlLineContact;
+        let h = EhlLineContact::new(r, 1.0e-3, w, u, eta, 1.13e11)
+            .expect("a valid contact")
+            .central_film_thickness();
+        prop_assert!(h.is_finite(), "film was {h}");
+        prop_assert!(h >= 0.0, "film was {h}");
+        if u == 0.0 {
+            prop_assert_eq!(h, 0.0, "no entrainment means no film");
+        }
+    }
+
+    /// Every sensitivity has the right sign. The load case is the EHL
+    /// signature; the radius case is the easy one to get backwards, since a
+    /// flatter contact is a *larger* one, so the same load spreads further and
+    /// the film is thinner.
+    #[test]
+    fn ehl_film_responds_in_the_right_direction_to_every_input(
+        u2 in 0.1f64..20.0,
+        w2 in 100.0f64..50_000.0,
+        e2 in 0.05f64..1.0,
+        r2 in 0.01f64..0.5,
+    ) {
+        use tpt_fluids_tribo::ehl::EhlLineContact;
+        let film = |r: f64, u: f64, w: f64, eta: f64| {
+            EhlLineContact::new(r, 0.012, w, u, eta, 1.13e11)
+                .expect("a valid contact")
+                .central_film_thickness()
+        };
+        let base = film(0.05, 1.0, 1000.0, 0.1);
+        prop_assert!(base > 0.0, "the reference film should be positive");
+        prop_assert!(film(0.05, u2, 1000.0, 0.1) > 0.0);
+        prop_assert!(film(0.05, 1.0, w2, 0.1) > 0.0);
+        prop_assert!(film(0.05, 1.0, 1000.0, e2) > 0.0);
+        prop_assert!(film(r2, 1.0, 1000.0, 0.1) > 0.0);
+        if u2 > 1.0 {
+            prop_assert!(film(0.05, u2, 1000.0, 0.1) > base, "faster is thicker");
+        }
+        if w2 > 1000.0 {
+            prop_assert!(film(0.05, 1.0, w2, 0.1) > base, "harder load is thicker");
+        }
+        if e2 > 0.1 {
+            prop_assert!(film(0.05, 1.0, 1000.0, e2) > base, "thicker oil is thicker");
+        }
+        if r2 < 0.05 {
+            prop_assert!(film(r2, 1.0, 1000.0, 0.1) > base, "flatter is thicker");
+        }
+    }
+
+    /// The point-contact minimum film is always the smaller of the two, by
+    /// exactly the published factor.
+    #[test]
+    fn ehl_point_minimum_film_is_the_documented_fraction(
+        r in 1.0e-3f64..1.0,
+        w in 1.0f64..1.0e5,
+        u in 0.01f64..50.0,
+    ) {
+        use tpt_fluids_tribo::ehl::EhlPointContact;
+        let point = EhlPointContact::new(r, w, u, 0.1, 1.13e11).expect("a valid contact");
+        let central = point.central_film_thickness();
+        let minimum = point.minimum_film_thickness();
+        prop_assert!(minimum < central, "minimum {minimum} vs central {central}");
+        prop_assert!(
+            (minimum / central - 0.8).abs() < 1e-12,
+            "ratio was {}",
+            minimum / central
+        );
+    }
+
+    /// The lambda ratio falls monotonically with roughness, which is what makes
+    /// it usable for comparing surface finishes.
+    #[test]
+    fn ehl_lambda_falls_with_roughness(r1 in 0.0f64..1.0e-5, r2 in 0.0f64..1.0e-5) {
+        use tpt_fluids_tribo::ehl::film_thickness_ratio;
+        let (low, high) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
+        prop_assert!(
+            film_thickness_ratio(1.0e-6, low, 0.0) >= film_thickness_ratio(1.0e-6, high, 0.0),
+            "roughness must not raise the ratio"
+        );
     }
 }

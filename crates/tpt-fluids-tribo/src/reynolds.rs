@@ -960,6 +960,54 @@ mod tests {
         );
     }
 
+    /// `load_x` points towards the **thickest** part of the film, and the test
+    /// pins the individual components rather than a loose angular band.
+    ///
+    /// The profile is `h = 1 - e + e cos(2 pi X)`, so the film is thickest at
+    /// `X = 0`, and the load the pressure carries must have a large positive
+    /// component along that direction. Swapping the sine and cosine in the
+    /// integral would transpose `load_x` and `load_y` and rotate the reported
+    /// attitude angle by 90 degrees.
+    ///
+    /// A loose band cannot catch that, which is worth stating: the existing
+    /// `the_load_is_in_the_wedge_half_of_the_bearing` test asserts the angle is
+    /// within +/-95 degrees, and the transposed pair is *also* within that band,
+    /// so it would pass. Comparing the components against each other is what
+    /// separates them.
+    ///
+    /// Note the pressure does **not** peak at `X = 0`. It peaks in the
+    /// *converging* wedge near `X = 0.29`, which is where the film is closing
+    /// fastest, and goes negative in the diverging half -- the documented
+    /// artefact of the Sommerfeld condition. Asserting a peak at the thickest
+    /// film would be asserting something false.
+    #[test]
+    fn the_load_points_towards_the_thickest_part_of_the_film() {
+        let solution = solve_journal_bearing(0.3, ReynoldsOptions::new(400)).expect("resolved");
+        // The load is dominated by the thick-film direction, so a swap of the
+        // sine and cosine factors would show up here immediately.
+        assert!(
+            solution.load_x > solution.load_y.abs(),
+            "load should be dominated by the thick-film direction, got ({}, {})",
+            solution.load_x,
+            solution.load_y
+        );
+        assert!(solution.load_x > 0.0, "load_x must be positive");
+        // The converging wedge is where the film closes fastest, and that is
+        // where the pressure peaks -- not at the maximum film thickness.
+        let peak_position = (0..solution.pressure.len())
+            .max_by(|&a, &b| {
+                solution.pressure[a]
+                    .partial_cmp(&solution.pressure[b])
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            })
+            .map(|i| i as f64 / (solution.pressure.len() - 1) as f64)
+            .unwrap_or(0.0);
+        assert!(
+            (0.2..0.4).contains(&peak_position),
+            "the pressure should peak in the converging wedge, not at {peak_position}"
+        );
+    }
+
     #[test]
     fn pressure_at_interpolates() {
         let solution = solve_journal_bearing(0.3, ReynoldsOptions::new(200)).expect("resolved");

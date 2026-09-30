@@ -34,6 +34,46 @@ fn the_prelude_reaches_every_domain() {
 
     let e_star = contact::reduced_modulus(contact::STEEL, contact::STEEL);
     assert!(e_star > 0.0);
+
+    // And the EHL module, which pairs with `contact` rather than standing alone.
+    let gear =
+        ehl::EhlLineContact::new(0.1, 0.012, 2000.0, 5.0, 0.1, e_star).expect("a valid gear mesh");
+    assert!(gear.central_film_thickness() > 0.0);
+}
+
+/// The EHL chain must compose across crates: a film from `ehl`, a modulus from
+/// `contact`, and a separation verdict consistent with both.
+#[test]
+fn the_ehl_chain_composes_through_the_umbrella() {
+    let e_star = contact::reduced_modulus(contact::STEEL, contact::STEEL);
+    let gear =
+        ehl::EhlLineContact::new(0.1, 0.012, 2000.0, 5.0, 0.1, e_star).expect("a valid gear mesh");
+    let h = gear.minimum_film_thickness();
+
+    // The film is a length in the same system as everything else, and it is
+    // thin relative to the Hertz contact patch -- that ratio is what makes the
+    // contact EHL rather than elastically similar.
+    let a = gear.contact_half_width();
+    assert!(
+        h > 0.0 && h < a,
+        "film {h} should be well under the contact {a}"
+    );
+
+    // A ground flank pair is boundary lubricated at this load, which is the
+    // physically correct and slightly counter-intuitive answer.
+    let lambda = ehl::film_thickness_ratio(h, 0.05e-6, 0.05e-6);
+    assert_eq!(
+        ehl::SeparationState::from_lambda(lambda),
+        ehl::SeparationState::Boundary
+    );
+
+    // And the wear crate's own lambda agrees with the EHL one for the same
+    // inputs, which is the cross-crate consistency these tests exist for.
+    let via_wear = wear::lambda_ratio(h, 0.05e-6, 0.05e-6);
+    assert!(
+        (via_wear - lambda).abs() / lambda < 1e-12,
+        "two lambdas for one contact: {via_wear} vs {lambda}"
+    );
 }
 
 #[test]
@@ -68,13 +108,16 @@ fn the_froude_scaling_chain_composes() {
     // changing an answer part way through.
     let form = 1.3;
     let roughness = 0.0003;
-    let c_model = 1.0e-5;
+    // A resistance coefficient as a ratio of resistance to displacement weight.
+    // For a 3000 DWT feeder this is a few times 1e-2; the old `1e-5` only
+    // produced a plausible number because the function also multiplied by
+    // `rho g`, and the two errors cancelled to within a rounding.
+    let c_model = 0.03;
     let ratio = 50.0;
 
     let c_ship = froude_scaling::extrapolate_coefficient(c_model, form, roughness);
     let displacement = froude_scaling::scaled_displacement(24.0, ratio);
-    let resistance_n =
-        froude_scaling::resistance_from_coefficient(c_ship, displacement, Density::new(1000.0));
+    let resistance_n = froude_scaling::resistance_from_coefficient(c_ship, displacement);
 
     // Same answer computed the other way round, through the full function.
     let direct = froude_scaling::extrapolate_resistance(
@@ -92,6 +135,18 @@ fn the_froude_scaling_chain_composes() {
         "composed {resistance_n} vs direct {direct}"
     );
     assert!(direct > 0.0);
+
+    // Agreement between two paths is necessary but *not* sufficient, and that
+    // is exactly what let the `rho g` units error through: both paths shared
+    // it, so the comparison was blind to the error by construction. This
+    // anchors the chain to a physical number instead. A 3.0e6 N (3000 t)
+    // ship at 18.6 kn needs a resistance of order 10^4 to 10^5 N; the old
+    // coefficient would have given a few newtons, which is not a ship.
+    assert!(
+        (1.0e4..1.0e6).contains(&direct),
+        "the extrapolated resistance was {direct} N, which is not a ship-sized \
+         force for a 3000 t vessel"
+    );
 }
 
 #[test]

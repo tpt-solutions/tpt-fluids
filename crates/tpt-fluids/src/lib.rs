@@ -120,8 +120,23 @@ pub mod prelude {
 
     #[cfg(feature = "tribo")]
     pub use tpt_fluids_tribo::contact;
+    /// EHL film thickness. Pairs with [`contact`], which supplies the reduced
+    /// modulus the correlations need.
+    #[cfg(feature = "tribo")]
+    pub use tpt_fluids_tribo::ehl;
+    /// Tribology friction: Coulomb, Stribeck, and LuGre.
+    ///
+    /// Aliased rather than exported bare, because `tpt-fluids-hydraulic` already
+    /// owns the name `friction` (pipe friction factors) and both are in this
+    /// prelude. A bare re-export would be a duplicate definition, so the
+    /// tribology one is reachable as `tribology_friction`.
+    #[cfg(feature = "tribo")]
+    pub use tpt_fluids_tribo::friction as tribology_friction;
     #[cfg(feature = "tribo")]
     pub use tpt_fluids_tribo::lubrication;
+    /// The full-film Reynolds solver.
+    #[cfg(feature = "tribo")]
+    pub use tpt_fluids_tribo::reynolds;
     #[cfg(feature = "tribo")]
     pub use tpt_fluids_tribo::wear;
 }

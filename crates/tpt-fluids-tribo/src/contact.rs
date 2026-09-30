@@ -113,11 +113,14 @@ pub fn contact_radius(load: f64, reduced_radius: f64, reduced_modulus: f64) -> f
         return 0.0;
     }
     if reduced_radius.is_infinite() {
-        // Two parallel bodies: the classic flat contact, a = (4 F R / pi E*)^(1/3)
-        // per unit length is the cylinder form; for a general infinite reduced
-        // radius the contact patch does not close, so report zero and let the
-        // caller use the flat-contact function.
-        return 0.0;
+        // Two parallel bodies. The Hertz point-contact formula does not apply:
+        // a cylinder problem has a different answer, `a = (4 F R / pi E*)^(1/3)`
+        // per unit length, and a general `R* = INFINITY` has no meaning beyond
+        // "the patch does not close under this model". Reporting `0.0` said a
+        // loaded flat contact has *no* contact patch, which is a finite,
+        // plausible-looking number for a physically wrong answer. `NaN` makes
+        // the inapplicability visible.
+        return f64::NAN;
     }
     if reduced_radius <= 0.0 {
         return 0.0;
@@ -137,28 +140,30 @@ pub fn peak_pressure(load: f64, contact_radius: f64) -> f64 {
 
 /// The elastic approach of two bodies, in metres.
 ///
-/// `delta = a^3 / (3 R*)`, which reduces to `F / (4 E*)`. For a hard contact
-/// this is astonishingly small: a 10 mm steel ball under 10 N comes to about
-/// 22 picometres, so the ball is not visibly dented at all.
+/// `delta = a^3 / (3 R*)`, which reduces to `F / (4 E*)` as `R*` goes to
+/// infinity. A flat-on-flat contact *is* that limit, and the reduction is a
+/// real physical result rather than an approximation.
+///
+/// Taking the limit needs `E*`, which this signature does not have, so the
+/// infinite case is **not** silently guessed. The old code reached for a
+/// placeholder that returned `f64::INFINITY`, giving `F / (4 * INFINITY) =
+/// 0.0` -- a loaded flat contact reported as having *no* deformation at all.
+/// It returned a finite, plausible-looking number and nothing complained,
+/// which is the worst possible failure. Use [`flat_approach`] for the
+/// flat-on-flat case; it takes the reduced modulus directly.
 pub fn approach(load: f64, contact_radius: f64, reduced_radius: f64) -> f64 {
     if load <= 0.0 || contact_radius <= 0.0 {
         return 0.0;
     }
     if reduced_radius.is_infinite() {
-        return load / (4.0 * reduced_modulus_stub());
+        // Not determinable without the reduced modulus; `flat_approach` has it.
+        return f64::NAN;
+    }
+    if reduced_radius <= 0.0 {
+        return 0.0;
     }
     let a_cubed = contact_radius * contact_radius * contact_radius;
     a_cubed / (3.0 * reduced_radius)
-}
-
-/// A helper only reachable through the infinite-reduced-radius branch of
-/// [`approach`]; kept private to the module's use.
-fn reduced_modulus_stub() -> f64 {
-    // Flat-on-flat contact is a cylinder problem whose approach is
-    // F / (4 E*) per unit of the shared length, so the reduced modulus has to
-    // come in from the caller. Rather than guess, the flat case is reported
-    // through `flat_approach`, which does take it.
-    f64::INFINITY
 }
 
 /// The elastic approach of a flat body pressed against a flat body, in metres
@@ -166,7 +171,9 @@ fn reduced_modulus_stub() -> f64 {
 ///
 /// This is the flat-on-flat limit, where the contact patch has no curvature
 /// and the problem reduces to a cylinder. It takes the reduced modulus
-/// directly because [`approach`] cannot infer it.
+/// directly because [`approach`] cannot infer it -- and asking `approach` for
+/// an infinite reduced radius returns `NaN` rather than inventing a modulus,
+/// so a caller who wants the flat case must come through here.
 pub fn flat_approach(load: f64, reduced_modulus: f64) -> f64 {
     if load <= 0.0 || reduced_modulus <= 0.0 {
         return 0.0;
@@ -401,6 +408,48 @@ mod tests {
         assert!(p < 250.0e6, "p0 = {} MPa", p / 1.0e6);
     }
 
+    /// A flat contact must **not** be reported as having no deformation, and
+    /// `approach` must not silently invent a modulus to get an answer.
+    ///
+    /// The infinite-reduced-radius branch used to reach for a placeholder that
+    /// returned `f64::INFINITY`, so `F / (4 * INFINITY)` came out as exactly
+    /// `0.0`: a flat contact carrying 10 N reported as not deforming at all. It
+    /// is a finite, plausible-looking number, so nothing downstream objected.
+    ///
+    /// The limit is real physics -- `delta = a^3 / (3 R*)` does reduce to
+    /// `F / (4 E*)` -- but evaluating it needs `E*`, which this signature does
+    /// not carry. So it returns `NaN` and the caller is sent to
+    /// [`flat_approach`], which has the modulus. The important property is that
+    /// the indeterminate case is *visibly* indeterminate.
+    #[test]
+    fn an_unreachable_flat_case_is_nan_rather_than_zero() {
+        let d = approach(10.0, 0.001, f64::INFINITY);
+        assert!(
+            d.is_nan(),
+            "a flat contact with no reduced modulus must be NaN, not {d} -- a \
+             zero would claim the contact does not deform at all"
+        );
+        // The determinable route gives the real, tiny, positive approach.
+        let flat = flat_approach(10.0, 1.0e11);
+        assert!((flat - 2.5e-11).abs() < 1e-13, "flat approach = {flat}");
+        assert!(flat > 0.0, "a loaded contact must deform");
+    }
+
+    /// A **non-infinite** large radius tends to the flat result, which is what
+    /// makes `NaN` at the limit the honest answer rather than a discontinuity.
+    #[test]
+    fn a_large_reduced_radius_approaches_the_flat_case() {
+        // As R* grows the curvature term vanishes and the approach is set by
+        // the load and the modulus, so a large finite radius must give a small,
+        // strictly positive, and decreasing answer.
+        let previous = approach(10.0, 0.001, 1.0e3);
+        let bigger = approach(10.0, 0.001, 1.0e9);
+        assert!(
+            bigger < previous && bigger > 0.0,
+            "approach should shrink with a flatter radius: {previous} -> {bigger}"
+        );
+    }
+
     #[test]
     fn flat_approach_uses_the_reduced_modulus_directly() {
         let e = reduced_modulus(STEEL, STEEL);
@@ -423,10 +472,35 @@ mod tests {
         let e = reduced_modulus(STEEL, STEEL);
         assert_eq!(contact_radius(0.0, 0.01, e), 0.0);
         assert_eq!(contact_radius(10.0, -0.01, e), 0.0);
-        assert_eq!(contact_radius(10.0, f64::INFINITY, e), 0.0);
         assert_eq!(peak_pressure(10.0, 0.0), 0.0);
         assert_eq!(mean_pressure(0.0, 0.01), 0.0);
         assert_eq!(approach(10.0, 0.0, 0.01), 0.0);
         assert_eq!(load_for_peak_pressure(0.0, 0.01, e), 0.0);
+    }
+
+    /// An infinite reduced radius means the point-contact model does not
+    /// apply, and that must be **visible**.
+    ///
+    /// Both `contact_radius` and `approach` used to answer `0.0` for a flat
+    /// contact: a loaded flat joint reported as having no contact patch and no
+    /// deformation whatsoever. Both numbers were finite, non-negative, and
+    /// entirely plausible, which is why nothing ever objected. The honest
+    /// answer is `NaN`, because the *formula* is inapplicable -- not zero,
+    /// which is a physical claim about the contact being unloaded.
+    #[test]
+    fn the_infinite_radius_case_is_nan_not_zero() {
+        let e = reduced_modulus(STEEL, STEEL);
+        let a = contact_radius(10.0, f64::INFINITY, e);
+        let d = approach(10.0, 0.001, f64::INFINITY);
+        assert!(
+            a.is_nan(),
+            "a flat contact has no point-contact patch, not a zero one: {a}"
+        );
+        assert!(
+            d.is_nan(),
+            "a flat contact has no point-contact approach: {d}"
+        );
+        // The determinable route is available and correct.
+        assert!(flat_approach(10.0, e) > 0.0);
     }
 }

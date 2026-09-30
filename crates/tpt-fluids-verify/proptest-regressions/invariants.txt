@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 0a54d2722c56fc43cf065dbdc5213452bb5f4988276bc6cc607a14aa3ebd8668 # shrinks to t_n = 0.5, zeta = 0.7598541907459215, t_wave = 44.1083351363345
+cc 0a9688a4670e2d66480a9bf3c5ffd74ab094e5141dfcf225210d8b09a15d819d # shrinks to resistance = 5600.9426169081, closure = 0.0, steps = 12, vapour = 861.9637309055308

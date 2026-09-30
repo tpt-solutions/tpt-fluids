@@ -136,6 +136,30 @@ impl Dimension {
     }
 }
 
+impl Dimension {
+    /// The dimension declared by a [`Quantity`], usable in a `const` context.
+    ///
+    /// The `dimensioned_ops!` macro calls this in a `const` assertion so that a
+    /// product whose declared dimension does not multiply out correctly is a
+    /// compile error. Without it the `Dimension` constants are documentation
+    /// rather than a guarantee: the operators all work on bare `f64`, so a wrong
+    /// constant would ship silently.
+    pub const fn dimension_of<Q: Quantity>() -> Self {
+        Q::DIMENSION
+    }
+
+    /// Whether two dimensions are equal, in a `const` context.
+    ///
+    /// `PartialEq` cannot be used in a constant, and these are the fields the
+    /// compiler needs to compare when checking a declared product.
+    pub const fn const_eq(self, other: Self) -> bool {
+        self.length == other.length
+            && self.mass == other.mass
+            && self.time == other.time
+            && self.temperature == other.temperature
+    }
+}
+
 impl fmt::Display for Dimension {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -276,14 +300,44 @@ macro_rules! dimensioned {
     };
 }
 
-/// Implements `A * B = C` and `A / B = C` (plus the commuted `B * A = C`) for
-/// three dimensioned quantities whose product is dimensionally meaningful.
+/// Declares `A * B = C` and `A / B = C` (plus the commuted `B * A = C`) for
+/// three dimensioned quantities.
 ///
-/// Self-products (`Length * Length`) would otherwise expand both the `A * B`
-/// and `B * A` arms into the same impl, so those cases are written out by
-/// hand just below rather than through this macro.
+/// The relation is **checked at compile time** against the `Dimension` each
+/// quantity declares, in a `const` assertion. A triple that does not hold is a
+/// build failure rather than a silently wrong constant, which matters because
+/// the arithmetic underneath is on bare `f64`: without the check the `Dimension`
+/// constants are decoration, and a wrong one would ship and mislead.
+///
+/// Which of the two relations is valid depends on the triple, so the arms are
+/// declared separately:
+///
+/// - `dimensioned_ops!` asserts the **product** and emits `Mul` in both orders.
+/// - `dimensioned_quotient!` asserts the **quotient** and emits `Div`.
+///
+/// Mixing them up is a units error, so each macro states which one it is
+/// proving. Self-products (`Length * Length`) would otherwise expand both the
+/// `A * B` and `B * A` arms into the same impl, so those cases are written out
+/// by hand below rather than through these macros.
 macro_rules! dimensioned_ops {
     ($a:ident, $b:ident, $c:ident) => {
+        const _: () = {
+            use $crate::quantity::Dimension as _Dim;
+            const _: () = assert!(
+                _Dim::dimension_of::<$a>()
+                    .mul(_Dim::dimension_of::<$b>())
+                    .const_eq(_Dim::dimension_of::<$c>()),
+                concat!(
+                    stringify!($a),
+                    " * ",
+                    stringify!($b),
+                    " does not have the ",
+                    "dimension of ",
+                    stringify!($c)
+                ),
+            );
+        };
+
         impl Mul<$b> for $a {
             type Output = $c;
             #[inline]
@@ -299,6 +353,33 @@ macro_rules! dimensioned_ops {
                 $c::new(self.value() * rhs.value())
             }
         }
+    };
+}
+
+/// Declares `A / B = C`, asserting that the quotient is dimensionally correct.
+///
+/// The computed `C` must genuinely be a *quotient* type. `dimensioned_ops!`
+/// exists for the product case, and the two are deliberately distinct so that
+/// `Length / Time = Velocity` (true) cannot be confused with
+/// `Length * Time = Velocity` (false).
+macro_rules! dimensioned_quotient {
+    ($a:ident, $b:ident, $c:ident) => {
+        const _: () = {
+            use $crate::quantity::Dimension as _Dim;
+            const _: () = assert!(
+                _Dim::dimension_of::<$a>()
+                    .div(_Dim::dimension_of::<$b>())
+                    .const_eq(_Dim::dimension_of::<$c>()),
+                concat!(
+                    stringify!($a),
+                    " / ",
+                    stringify!($b),
+                    " does not have the ",
+                    "dimension of ",
+                    stringify!($c)
+                ),
+            );
+        };
 
         impl Div<$b> for $a {
             type Output = $c;
@@ -433,17 +514,32 @@ dimensioned!(
     VelocityPerArea, "m/s", Dimension::VOLUMETRIC_FLOW.div(Dimension::AREA)
 );
 
+// Products: A * B = C, and the commuted B * A = C.
+//
+// Every one of these is dimensionally correct. The macro proves it at compile
+// time, so a wrong triple cannot be added here by mistake.
 dimensioned_ops!(Area, Length, Volume);
-dimensioned_ops!(Length, Time, Velocity);
-dimensioned_ops!(Velocity, Time, Length);
 dimensioned_ops!(Area, Velocity, VolumetricFlow);
-dimensioned_ops!(Length, Velocity, VolumetricFlow);
-dimensioned_ops!(Mass, Volume, Density);
+dimensioned_ops!(Velocity, Time, Length);
 dimensioned_ops!(Density, VolumetricFlow, MassFlow);
 dimensioned_ops!(Density, KinematicViscosity, DynamicViscosity);
-dimensioned_ops!(VolumetricFlow, Length, VolumetricFlowPerLength);
-dimensioned_ops!(VolumetricFlow, Area, VelocityPerArea);
-dimensioned_ops!(Energy, Volume, Pressure);
+dimensioned_ops!(Force, Velocity, Power);
+dimensioned_ops!(Pressure, Volume, Energy);
+
+// Quotients: A / B = C, each a genuine division.
+//
+// These are the relations that were previously generated alongside the wrong
+// ones by a single macro that emitted both `Mul` and `Div` from one triple. That
+// is how `Length * Time = Velocity` came to exist: the macro never checked
+// either relation, and both were emitted whether or not they meant anything.
+// The check now rejects those at compile time.
+dimensioned_quotient!(Length, Time, Velocity);
+dimensioned_quotient!(Velocity, Time, Acceleration);
+dimensioned_quotient!(Area, Length, Length);
+dimensioned_quotient!(Mass, Volume, Density);
+dimensioned_quotient!(VolumetricFlow, Length, VolumetricFlowPerLength);
+dimensioned_quotient!(VolumetricFlow, Area, VelocityPerArea);
+dimensioned_quotient!(Energy, Volume, Pressure);
 
 /// `Power / Velocity = Force`, the work rate per unit of a body's speed.
 ///
@@ -478,6 +574,74 @@ mod tests {
         assert_eq!(Dimension::LENGTH.powi(3), Dimension::VOLUME);
         assert!(Dimension::DIMENSIONLESS.is_dimensionless());
         assert!(!Dimension::LENGTH.is_dimensionless());
+    }
+
+    /// The declared `Dimension` of a quantity is a real check, not decoration.
+    ///
+    /// The `dimensioned_ops!` and `dimensioned_quotient!` macros assert, in a
+    /// `const` context, that each declared relation really does produce the
+    /// output type's dimension. These spot checks cover the directions a
+    /// caller is most likely to reach for, and they are what would catch a
+    /// constant that was edited by hand.
+    #[test]
+    fn declared_dimensions_multiply_and_divide_as_advertised() {
+        // L / T = velocity, and the inverse T * V gives back a length.
+        assert_eq!(Dimension::LENGTH.div(Dimension::TIME), Dimension::VELOCITY);
+        assert_eq!(Dimension::TIME.mul(Dimension::VELOCITY), Dimension::LENGTH);
+        // A * V = volumetric flow, and rho * Q = mass flow.
+        assert_eq!(
+            Dimension::AREA.mul(Dimension::VELOCITY),
+            Dimension::VOLUMETRIC_FLOW
+        );
+        assert_eq!(
+            Dimension::DENSITY.mul(Dimension::VOLUMETRIC_FLOW),
+            Dimension::MASS_FLOW
+        );
+        // J / m^3 = Pa, P / V = force, and F / A = pressure again.
+        assert_eq!(
+            Dimension::ENERGY.div(Dimension::VOLUME),
+            Dimension::PRESSURE
+        );
+        assert_eq!(Dimension::POWER.div(Dimension::VELOCITY), Dimension::FORCE);
+        assert_eq!(Dimension::FORCE.div(Dimension::AREA), Dimension::PRESSURE);
+    }
+
+    /// Every product and quotient the crate declares is **usable**, so a caller
+    /// is not left with dimension constants that have no operator behind them.
+    ///
+    /// The compile-time assertions in the macros prove the relations are
+    /// dimensionally sound. This proves the operators actually exist and give
+    /// the right numbers, which is a different thing: an `impl` can be present
+    /// and still return the wrong value, and the whole point of the split was
+    /// that the old macro emitted operators whose *meaning* nobody had checked.
+    #[test]
+    fn the_declared_products_and_quotients_are_usable() {
+        // A * L = V, and A / L = L: the same pair in both directions.
+        let area = Area::new(6.0);
+        let length = Length::new(4.0);
+        let volume: Volume = area * length;
+        assert!((volume.value() - 24.0).abs() < 1e-12);
+        let back: Length = area / length;
+        assert!((back.value() - 1.5).abs() < 1e-12, "m^2/m is a length");
+
+        // L / T = V, and V * T = L.
+        let time = Time::new(2.0);
+        let velocity: Velocity = length / time;
+        assert!((velocity.value() - 2.0).abs() < 1e-12);
+        let again: Length = velocity * time;
+        assert!((again.value() - 4.0).abs() < 1e-12);
+
+        // V / T = acceleration, which is the relation the old macro got wrong.
+        let accel: Acceleration = velocity / time;
+        assert!((accel.value() - 1.0).abs() < 1e-12, "m/s / s is m/s^2");
+
+        // F * V = power, and J / m^3 = pressure.
+        let force = Force::new(100.0);
+        let power: Power = force * velocity;
+        assert!((power.value() - 200.0).abs() < 1e-12);
+        let energy = Energy::new(1000.0);
+        let pressure: Pressure = energy / Volume::new(2.0);
+        assert!((pressure.value() - 500.0).abs() < 1e-12);
     }
 
     #[test]

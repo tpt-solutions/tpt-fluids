@@ -42,6 +42,27 @@ jobs:
       - run: cargo nextest run --workspace --all-features
       - run: cargo test --workspace --all-features --doc
 
+  # Documentation is verified as strictly as the code. An unresolved
+  # intra-doc link is not a compile error and not a test failure: rustdoc drops
+  # the link and emits the reference as plain text, so a dead cross-reference
+  # ships silently. This job is the only thing that catches it, and it caught
+  # four on its first run -- two of them written while fixing other bugs, which
+  # is exactly the case a test suite cannot see.
+  #
+  # `RUSTDOCFLAGS: -D warnings` turns every rustdoc warning into a failure, so
+  # an unresolved link, a bare URL, a broken heading anchor, or an unclosed
+  # `#[doc]` block all stop the build. `--workspace` is deliberate: a link
+  # resolves in the crate that writes it, and `MocNetwork` or `Self::foo` only
+  # means something in the module that actually owns them.
+  doc:
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --workspace --all-features --no-deps
+
   no_std:
     runs-on: ubuntu-latest
     steps:

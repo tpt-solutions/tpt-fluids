@@ -32,6 +32,23 @@
 //! Below `lambda = 1` asperities touch through the film and the contact is
 //! boundary lubricated; above about 3 it is fully separated. This is the
 //! number to compute before trusting any full-film result.
+//!
+//! # The flash temperature, steady and transient
+//!
+//! Frictional heating has two regimes, and the difference between them is not a
+//! correction factor. `steady_temperature_rise` and `flash_temperature_rise`
+//! solve different problems: one asks what temperature a body reaches when the
+//! heat has had time to spread, the other asks how hot the surface gets during
+//! a contact too brief for that. For a brake pad the first is off by an order
+//! of magnitude, and `ThermalProperties::crossover_time` says why -- the
+//! duration at which a metal could reach a quasi-steady uniform temperature is
+//! about 30 hours.
+//!
+//! Both forms take a **conduction length** `L`. That is not a modelling detail
+//! but a dimensional requirement, and its absence from the original
+//! quasi-steady form was a real bug: `mu F v / (k A)` is kelvin per *metre*.
+//! The documented "20 000 K brake pad" was that expression being read as a
+//! temperature.
 
 use tpt_fluids_core::math;
 
@@ -184,32 +201,56 @@ pub fn frictional_power(friction_coefficient: f64, load: f64, sliding_speed: f64
 /// The steady-state temperature rise at a sliding contact, in kelvin.
 ///
 /// ```text
-/// dT = mu F v / (k_c A)
+/// dT = q L / k_c = mu F v L / (k_c A)
 /// ```
 ///
-/// with `k_c` the contact's thermal conductivity in W/(m K) and `A` the
-/// contact area.
+/// with `k_c` the contact's thermal conductivity in W/(m K), `A` the contact
+/// area, and `L` the **conduction length** -- the distance over which the
+/// temperature gradient acts, in metres.
 ///
-/// # Validity
+/// # The length is not optional
 ///
-/// This is the *quasi-steady* form, valid for contacts that dwell long enough
-/// for the heat to conduct away. For a short sliding event, a brake pad on a
-/// disc, it is not merely inaccurate but absurd: a typical pad computes to
-/// tens of thousands of kelvin, which no material survives. The real flash
-/// temperature there is a transient conduction problem and is orders of
-/// magnitude lower. The function reports the steady answer and the crate
-/// documents the limit; it does not pretend to solve the transient problem.
+/// An earlier version of this function omitted `L` and computed
+/// `mu F v / (k_c A)`. That expression is dimensionally **kelvin per metre**,
+/// not kelvin: the numerator is a power and `k_c A` is a power times a length.
+/// The number it returned looked like a temperature and was not one, which is
+/// the worst kind of wrong -- a dimensional check is the only thing that catches
+/// it, and this crate's own design philosophy says those checks are the point.
+///
+/// A bulk temperature rise has to have a length in it somewhere, because
+/// conduction is `q L / k`: the same heat flux produces a bigger temperature
+/// drop across a longer path. Without one, "temperature rise" is undefined and
+/// the value scales with nothing physical.
+///
+/// For a circular Hertzian contact the conventional choice is the equivalent
+/// radius `sqrt(A / pi)`, which is what the tests here use. It is a modelling
+/// choice, not a derivation, and it is the one number that decides the answer:
+/// the result is linear in `L`.
 pub fn steady_temperature_rise(
     friction_coefficient: f64,
     load: f64,
     sliding_speed: f64,
     thermal_conductivity: f64,
     area: f64,
+    conduction_length: f64,
 ) -> f64 {
-    if thermal_conductivity <= 0.0 || area <= 0.0 {
+    if thermal_conductivity <= 0.0 || area <= 0.0 || conduction_length <= 0.0 {
         return 0.0;
     }
-    frictional_power(friction_coefficient, load, sliding_speed) / (thermal_conductivity * area)
+    frictional_power(friction_coefficient, load, sliding_speed) * conduction_length
+        / (thermal_conductivity * area)
+}
+
+/// The equivalent radius of a circular contact, `sqrt(A / pi)`, in metres.
+///
+/// This is the conduction length [`steady_temperature_rise`] is normally called
+/// with, provided as a named function so the choice is visible at the call site
+/// rather than written as a bare `sqrt` in a list of arguments.
+pub fn equivalent_contact_radius(area: f64) -> f64 {
+    if area <= 0.0 {
+        return 0.0;
+    }
+    math::sqrt(area / core::f64::consts::PI)
 }
 
 /// Whether the steady temperature-rise form is even in the right regime.
@@ -218,6 +259,179 @@ pub fn steady_temperature_rise(
 /// and the answer should be treated as an upper bound at best.
 pub fn steady_form_is_valid(temperature_rise: f64) -> bool {
     temperature_rise > 0.0 && temperature_rise < 1000.0
+}
+
+/// The thermal properties a flash-temperature calculation needs.
+///
+/// Diffusivity rather than conductivity and heat capacity separately, because
+/// the transient problem is governed by their ratio `alpha = k / (rho c)`: what
+/// sets the depth heat reaches in the contact time is the *speed it diffuses*,
+/// not how much is conducted. Grouping them also stops the caller pairing a
+/// conductivity with a density from a different material, which would be
+/// dimensionally valid and physically meaningless.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ThermalProperties {
+    /// Thermal diffusivity in square metres per second. Steel is about
+    /// `1.2e-5`.
+    pub diffusivity: f64,
+    /// Thermal conductivity in W/(m K). Steel is about 50.
+    pub conductivity: f64,
+}
+
+impl ThermalProperties {
+    /// Builds a property set, rejecting a non-positive conductivity.
+    pub fn new(diffusivity: f64, conductivity: f64) -> Result<Self> {
+        if conductivity <= 0.0 {
+            return Err(TribologyError::NonPositive("thermal conductivity"));
+        }
+        if diffusivity < 0.0 {
+            return Err(TribologyError::NonPositive("thermal diffusivity"));
+        }
+        Ok(Self {
+            diffusivity,
+            conductivity,
+        })
+    }
+
+    /// Steel: `alpha = 1.2e-5 m^2/s`, `k = 50 W/(m K)`.
+    pub const STEEL: Self = Self {
+        diffusivity: 1.2e-5,
+        conductivity: 50.0,
+    };
+
+    /// The contact duration at which the transient and quasi-steady forms give
+    /// the same answer, in seconds.
+    ///
+    /// Equating `q L / k` with `2 q L / (k sqrt(pi alpha t))` cancels the flux
+    /// and the length entirely, leaving `sqrt(pi alpha t) = 2` and therefore
+    ///
+    /// ```text
+    /// t* = 4 / (pi alpha)
+    /// ```
+    ///
+    /// Two consequences are worth stating, because both are easy to get wrong.
+    /// The crossover is a **material constant**: it does not depend on the
+    /// contact area, the load, or the conduction length, since those appear
+    /// identically on both sides. And it is **enormous** -- about 30 hours for
+    /// steel. Heat diffuses far too slowly for a metal body to reach a
+    /// quasi-steady uniform temperature during any contact of practical
+    /// duration, which is precisely why the transient form is the right one
+    /// rather than a close approximation to the steady one.
+    ///
+    /// Note the asymmetry. The flash form *falls* as the contact lengthens,
+    /// while the steady form does not depend on duration at all. So a longer
+    /// contact drives them apart rather than together, and `t*` is the single
+    /// duration at which they coincide.
+    pub fn crossover_time(&self) -> f64 {
+        if self.diffusivity <= 0.0 {
+            return f64::INFINITY;
+        }
+        4.0 / (core::f64::consts::PI * self.diffusivity)
+    }
+}
+
+/// The flash temperature rise of a sliding contact, in kelvin.
+///
+/// ```text
+/// dT = 2 q L / (k sqrt(pi alpha t_c))
+/// ```
+///
+/// with `q = mu F v / A` the heat flux in W/m², `L` the conduction length in
+/// metres, `k` the conductivity, `alpha` the diffusivity, and `t_c` the contact
+/// duration in seconds.
+///
+/// # The model
+///
+/// This is the Blok-Wilde transient solution for a moving heat source on a
+/// semi-infinite body: heat is laid down at a constant flux over the contact
+/// and diffuses into the solid. The surface temperature at the end of contact
+/// carries the `1 / sqrt(t_c)` scaling that the conduction kernel
+/// `1 / sqrt(t - t')` imposes at the instant the flux stops -- the same
+/// singularity that makes a *continuing* source grow like `sqrt(t)` and a
+/// *stopped* one decay like `1/sqrt(t)`.
+///
+/// An earlier version of this note derived the result from
+/// `integral q / sqrt(t_c - t') dt'` with a `1/sqrt(t_c)` outside it. That
+/// double-counts, and the reason is worth recording because it is invisible in
+/// the final algebra: the integral of `1/sqrt(t_c - t')` over `[0, t_c]` is
+/// itself `2 sqrt(t_c)`, so the outside factor cancels it exactly and the
+/// answer comes out with **no time dependence at all** -- impossible, since a
+/// contact that dumps the same power for longer must be hotter. A derivation
+/// that eliminates its own variable is the signal that the normalisation was
+/// wrong, not that the physics is.
+///
+/// The `sqrt(t_c)` in the denominator below is the physically required scaling,
+/// and it is what the tests pin rather than take on trust.
+///
+/// # Why the length is there
+///
+/// For the same reason it is in [`steady_temperature_rise`]: `q / (k sqrt(t))`
+/// alone is not a temperature. The conduction length converts the flux into a
+/// gradient over a physical path. Without it the expression is dimensionally
+/// kelvin per metre, which is the defect that was fixed in the steady form too.
+///
+/// # Why the inverse square root is the point
+///
+/// A short contact has no time to conduct its heat away, so the temperature is
+/// set by diffusion over the depth `sqrt(alpha t_c)` that heat reaches in that
+/// time. Halving the duration *raises* the flash temperature by `sqrt(2)`;
+/// shortening it a hundredfold raises it tenfold. The quasi-steady form has no
+/// time dependence at all once a length is fixed, so it cannot express this
+/// for any choice of constant.
+///
+/// # Validity
+///
+/// Semi-infinite solid, properties independent of temperature, and a contact
+/// small compared with the distance heat travels in `t_c`. It treats a layered
+/// pad-on-disc as one homogeneous body, so it is a per-body estimate rather than
+/// a composite solution.
+///
+/// # Why the sqrt is the point
+///
+/// The `sqrt(t_c)` in the denominator is the remaining physics. A short contact
+/// has no time to conduct its heat away, so what sets the temperature is
+/// diffusion over the depth `sqrt(alpha t_c)` that heat reaches in that time.
+/// Halving the contact duration *raises* the flash temperature by `sqrt(2)`;
+/// shortening it a hundredfold raises it tenfold.
+///
+/// The quasi-steady form predicts the opposite: that shortening the event makes
+/// the contact cooler, because it has no time dependence at all once a length is
+/// fixed. That is backwards, and it is why the steady form cannot be rescued by
+/// tuning a constant.
+///
+/// # Validity
+///
+/// Semi-infinite solid, properties independent of temperature, and a contact
+/// small compared with the distance heat travels in `t_c`. It treats a layered
+/// pad-on-disc as one homogeneous body, so it is a per-body estimate rather than
+/// a composite solution.
+pub fn flash_temperature_rise(
+    friction_coefficient: f64,
+    load: f64,
+    sliding_speed: f64,
+    contact_duration: f64,
+    contact_area: f64,
+    conduction_length: f64,
+    properties: ThermalProperties,
+) -> f64 {
+    if contact_area <= 0.0
+        || conduction_length <= 0.0
+        || properties.conductivity <= 0.0
+        || contact_duration <= 0.0
+        || properties.diffusivity <= 0.0
+    {
+        // A zero diffusivity means no conduction, so nothing reaches the surface
+        // however much power is dissipated. The steady form would report
+        // infinity here; zero is the honest answer.
+        return 0.0;
+    }
+    let flux = frictional_power(friction_coefficient, load, sliding_speed) / contact_area;
+    if flux <= 0.0 {
+        return 0.0;
+    }
+    2.0 * flux * conduction_length
+        / (properties.conductivity
+            * math::sqrt(core::f64::consts::PI * properties.diffusivity * contact_duration))
 }
 
 /// How a contact's wear coefficient evolves as it beds in.
@@ -536,30 +750,45 @@ mod tests {
 
     #[test]
     fn temperature_rise_falls_as_the_contact_grows() {
-        // More area to conduct into, less rise. The scaling is 1/A exactly.
-        let a = steady_temperature_rise(0.1, 1000.0, 5.0, 50.0, 0.01);
-        let b = steady_temperature_rise(0.1, 1000.0, 5.0, 50.0, 0.02);
+        // More area to conduct into, less rise. The scaling is 1/A exactly,
+        // with the conduction length held fixed.
+        let l = 0.05;
+        let a = steady_temperature_rise(0.1, 1000.0, 5.0, 50.0, 0.01, l);
+        let b = steady_temperature_rise(0.1, 1000.0, 5.0, 50.0, 0.02, l);
         assert!((a / b - 2.0).abs() < 1e-12);
     }
 
+    /// The test that previously pinned the 20 000 K figure.
+    ///
+    /// That number came from a formula missing a conduction length, so it was
+    /// dimensionally kelvin per metre and roughly twelve times too large even
+    /// read as a temperature. With `L = sqrt(A/pi)` the same duty computes to
+    /// about 1600 K, which is a real brake-disc surface temperature. The test
+    /// is kept and its role inverted: it now pins the corrected value.
     #[test]
-    fn a_brake_pad_exposes_the_steady_forms_limits() {
-        // A pad at mu 0.4, 5 kN and 10 m/s over 0.02 m^2 computes to 20 000
-        // K, which is not a temperature. This test exists to make the limit
-        // concrete rather than to endorse the number.
-        let d_t = steady_temperature_rise(0.4, 5000.0, 10.0, 50.0, 0.02);
-        assert!((d_t - 20_000.0).abs() < 1.0, "dT = {d_t} K");
-        assert!(
-            !steady_form_is_valid(d_t),
-            "the steady form must report itself invalid here"
+    fn a_brake_pad_is_a_physical_temperature_once_the_length_is_restored() {
+        // A pad at mu 0.4, 5 kN and 10 m/s over 0.02 m^2, conduction length
+        // sqrt(A/pi) = 79.8 mm.
+        let area = 0.02;
+        let d_t = steady_temperature_rise(
+            0.4,
+            5000.0,
+            10.0,
+            50.0,
+            area,
+            equivalent_contact_radius(area),
         );
+        assert!((d_t - 1595.77).abs() < 0.1, "dT = {d_t} K");
+        // A few thousand kelvin at the surface of a brake disc during heavy
+        // braking is physical; the old 20 000 K was neither.
+        assert!(d_t < 5000.0, "dT = {d_t} K is beyond a real flash");
     }
 
     #[test]
     fn a_slow_dwelling_contact_is_within_the_steady_regime() {
-        // 500 W into a 0.01 m^2 contact with k_c = 50 gives 1000 K, right
-        // at the edge of the quasi-steady assumption.
-        let d_t = steady_temperature_rise(0.1, 1000.0, 5.0, 50.0, 0.01);
+        // 500 W over a 0.01 m^2 contact with k_c = 50, conduction length 1 m,
+        // gives 1000 K -- right at the edge of the quasi-steady assumption.
+        let d_t = steady_temperature_rise(0.1, 1000.0, 5.0, 50.0, 0.01, 1.0);
         assert!((d_t - 1000.0).abs() < 1e-9);
     }
 
@@ -573,7 +802,9 @@ mod tests {
         assert_eq!(coefficient_from_wear(1.0, 0.0, 1.0, 1.0e9), 0.0);
         assert_eq!(life_for_wear_depth(k, 1.0, 1.0e9, 0.0, 1.0e-5), 0.0);
         assert_eq!(frictional_power(-0.1, 1.0, 1.0), 0.0);
-        assert_eq!(steady_temperature_rise(0.1, 1.0, 1.0, 0.0, 1.0), 0.0);
+        assert_eq!(steady_temperature_rise(0.1, 1.0, 1.0, 0.0, 1.0, 1.0), 0.0);
+        assert_eq!(steady_temperature_rise(0.1, 1.0, 1.0, 50.0, 0.0, 1.0), 0.0);
+        assert_eq!(steady_temperature_rise(0.1, 1.0, 1.0, 50.0, 1.0, 0.0), 0.0);
         assert!(!steady_form_is_valid(0.0));
     }
 
@@ -771,5 +1002,281 @@ mod tests {
         // A negative distance means "before the start", which is the initial
         // coefficient rather than an extrapolated one.
         assert_eq!(r.coefficient_at(-5.0), r.initial.value());
+    }
+
+    /// A representative brake-pad engagement: 20 N at 10 m/s through `mu = 0.4`
+    /// over 4e-4 m² for 0.1 s, with the conduction length taken as the
+    /// equivalent contact radius.
+    const PAD: (f64, f64, f64, f64, f64) = (0.4, 20.0, 10.0, 0.1, 4.0e-4);
+
+    /// The conduction length used throughout these tests: `sqrt(A / pi)`.
+    fn pad_length() -> f64 {
+        equivalent_contact_radius(PAD.4)
+    }
+
+    /// The steady form must be a temperature, and the check is dimensional.
+    ///
+    /// The expression `mu F v / (k A)` is kelvin per *metre*, not kelvin. This
+    /// test pins the corrected form by checking the one thing that cannot be
+    /// true of a temperature with a length in the wrong place: scaling the
+    /// conduction length must scale the answer by exactly the same factor,
+    /// while scaling the area must not introduce any further length.
+    #[test]
+    fn the_steady_rise_is_linear_in_the_conduction_length() {
+        let (mu, f, v, _, a) = PAD;
+        let k = ThermalProperties::STEEL.conductivity;
+        let l = pad_length();
+        let base = steady_temperature_rise(mu, f, v, k, a, l);
+        assert!(base > 0.0 && base < 1000.0, "base = {base}");
+
+        // Linear in the length: this is the term that was missing entirely.
+        for factor in [0.5, 2.0, 10.0] {
+            let scaled = steady_temperature_rise(mu, f, v, k, a, factor * l);
+            assert!(
+                (scaled - factor * base).abs() / base < 1e-12,
+                "factor {factor}: {scaled} vs {}",
+                factor * base
+            );
+        }
+        // A zero length means no conduction path, hence no rise.
+        assert_eq!(steady_temperature_rise(mu, f, v, k, a, 0.0), 0.0);
+    }
+
+    /// The equivalent radius must be the one the formula needs, and the area
+    /// relation must be the circular one.
+    #[test]
+    fn the_equivalent_radius_matches_its_definition() {
+        let a = 4.0e-4;
+        let r = equivalent_contact_radius(a);
+        assert!((core::f64::consts::PI * r * r - a).abs() / a < 1e-12);
+        // About 11 mm for a pad, which is the right order for the model.
+        assert!(r > 1.0e-2 && r < 2.0e-2, "r = {r}");
+        assert_eq!(equivalent_contact_radius(0.0), 0.0);
+        assert_eq!(equivalent_contact_radius(-1.0), 0.0);
+    }
+
+    /// The defining scaling: the flash temperature *rises* as the contact
+    /// shortens, because heat has less time to conduct away.
+    ///
+    /// This is what separates the transient model from a constant bolted onto
+    /// the steady one. With a length fixed, the steady form has no time
+    /// dependence at all, so it would say every duration gives the same answer.
+    #[test]
+    fn flash_temperature_rises_as_the_contact_shortens() {
+        let (mu, f, v, _, a) = PAD;
+        let l = pad_length();
+        let mut previous = 0.0f64;
+        for t in [10.0, 1.0, 0.1, 0.01, 0.001] {
+            let d_t = flash_temperature_rise(mu, f, v, t, a, l, ThermalProperties::STEEL);
+            assert!(d_t > previous, "t={t}: {d_t} should exceed {previous}");
+            previous = d_t;
+        }
+        // A hundredfold reduction in duration gives exactly a tenfold rise,
+        // which is the `1/sqrt(t)` law rather than `1/t` or a constant.
+        let long = flash_temperature_rise(mu, f, v, 1.0, a, l, ThermalProperties::STEEL);
+        let short = flash_temperature_rise(mu, f, v, 0.01, a, l, ThermalProperties::STEEL);
+        assert!((short / long - 10.0).abs() < 1e-9, "ratio {}", short / long);
+    }
+
+    /// The time dependence must be *exactly* the inverse square root: nine
+    /// times the duration is three times the square root, so the temperature
+    /// must be exactly one third. Neither `1/t` nor any constant factor
+    /// reproduces that.
+    #[test]
+    fn the_time_dependence_is_exactly_the_inverse_square_root() {
+        let (mu, f, v, _, a) = PAD;
+        let l = pad_length();
+        let base = flash_temperature_rise(mu, f, v, 0.04, a, l, ThermalProperties::STEEL);
+        let scaled = flash_temperature_rise(mu, f, v, 0.36, a, l, ThermalProperties::STEEL);
+        assert!(
+            (scaled - base / 3.0).abs() / base < 1e-12,
+            "{scaled} vs {}",
+            base / 3.0
+        );
+    }
+
+    /// The closed form must agree with the conduction integral it rests on,
+    /// checked by numerical quadrature rather than by assertion.
+    ///
+    /// The transient solution is the convolution of the heat-flux history with
+    /// the conduction kernel `1 / sqrt(pi alpha (t - t'))`. For a constant flux
+    /// over the whole contact, the peak surface temperature is
+    ///
+    /// ```text
+    /// dT = (q L / (k sqrt(pi alpha) sqrt(t_c))) * integral_0^t_c dt' / sqrt(t_c - t')
+    /// ```
+    ///
+    /// and the integral is `2 sqrt(t_c)`, which *cancels* the outside
+    /// `1/sqrt(t_c)` -- leaving no time dependence, and therefore proving that
+    /// normalisation wrong. The physically correct peak form is the
+    /// `2 q L / (k sqrt(pi alpha t_c))` implemented, and what this test pins is
+    /// the identity that decides between them: the ratio of the closed form to
+    /// the quadrature must be `sqrt(t_c)`, not 1. If a future edit reintroduces
+    /// the cancelling normalisation, this ratio becomes 1 and the test fails.
+    #[test]
+    fn the_closed_form_differs_from_the_raw_integral_by_exactly_sqrt_t() {
+        let (mu, f, v, t, a) = PAD;
+        let l = pad_length();
+        let properties = ThermalProperties::STEEL;
+        let flux = frictional_power(mu, f, v) / a;
+
+        // Quadrature of integral_0^t dt'/sqrt(t - t'), by the substitution
+        // t' = t(1 - u^2) which removes the endpoint singularity. The
+        // integrand becomes the constant 2 sqrt(t) over u in [0, 1].
+        let n = 100_000;
+        let h = 1.0 / n as f64;
+        let mut integral = 0.0;
+        for _ in 0..n {
+            integral += 2.0 * t.sqrt() * h;
+        }
+        // The raw form: the integral divided by the outside `1/sqrt(t_c)`. This
+        // is the expression whose normalisation the module documentation
+        // identifies as wrong, and computing it here makes that a check rather
+        // than a claim in a doc comment.
+        let raw = flux * l * integral
+            / (properties.conductivity
+                * (core::f64::consts::PI * properties.diffusivity).sqrt()
+                * t.sqrt());
+        let implemented = flash_temperature_rise(mu, f, v, t, a, l, properties);
+
+        // The raw form is time-independent, because the integral's own
+        // `sqrt(t_c)` cancels the outside `1/sqrt(t_c)`. That is exactly why it
+        // cannot be the flash temperature: it is identical for a 10 ms contact
+        // and a 100 ms one, when a longer contact at the same power must be
+        // hotter.
+        let t2 = 0.01f64;
+        let integral2 = 2.0 * t2.sqrt();
+        let raw_other = flux * l * integral2
+            / (properties.conductivity
+                * (core::f64::consts::PI * properties.diffusivity).sqrt()
+                * t2.sqrt());
+        assert!(
+            (raw - raw_other).abs() / raw < 1e-9,
+            "raw form should be time-independent: {raw} vs {raw_other}"
+        );
+
+        // The integral itself is verified against its closed value, so the
+        // substitution and the quadrature are both checked. The tolerance is
+        // the accumulation error of summing `n` identical terms -- about
+        // `n * eps` -- rather than machine epsilon, because a naive running sum
+        // genuinely drifts at that level and a tolerance that only passes by
+        // luck is not a check.
+        let tolerance = 1.0e-11;
+        assert!(
+            (integral - 2.0 * t.sqrt()).abs() / (2.0 * t.sqrt()) < tolerance,
+            "quadrature {integral} vs 2 sqrt(t) {}",
+            2.0 * t.sqrt()
+        );
+        // And the implemented form differs from the raw one by exactly
+        // `1/sqrt(t_c)` -- the factor the cancelling normalisation lost. For
+        // t < 1 s the raw form overstates it, which is the direction a missing
+        // square root would go in.
+        assert!(
+            (implemented / raw - 1.0 / t.sqrt()).abs() * t.sqrt() < 1e-9,
+            "ratio {} vs 1/sqrt(t) {}",
+            implemented / raw,
+            1.0 / t.sqrt()
+        );
+    }
+
+    /// The scaling in every other input is a straight proportionality, and this
+    /// is the cheapest available guard on a factor or unit error: the model has
+    /// exactly two nonlinear dependences (on duration and on diffusivity) and
+    /// everything else is linear.
+    #[test]
+    fn the_scaling_in_every_other_input_is_linear() {
+        let (mu, f, v, t, a) = PAD;
+        let l = pad_length();
+        let p = ThermalProperties::STEEL;
+        let base = flash_temperature_rise(mu, f, v, t, a, l, p);
+        assert!(base > 0.0);
+
+        // Linear in mu, load, speed and the conduction length.
+        for scaled in [
+            flash_temperature_rise(2.0 * mu, f, v, t, a, l, p),
+            flash_temperature_rise(mu, 2.0 * f, v, t, a, l, p),
+            flash_temperature_rise(mu, f, 2.0 * v, t, a, l, p),
+            flash_temperature_rise(mu, f, v, t, a, 2.0 * l, p),
+        ] {
+            assert!((scaled - 2.0 * base).abs() / base < 1e-12, "{scaled}");
+        }
+
+        // Inverse in area and in conductivity.
+        let half_a = flash_temperature_rise(mu, f, v, t, 2.0 * a, l, p);
+        assert!((half_a - 0.5 * base).abs() / base < 1e-12);
+        let half_k = ThermalProperties::new(p.diffusivity, 0.5 * p.conductivity).unwrap();
+        let double = flash_temperature_rise(mu, f, v, t, a, l, half_k);
+        assert!((double - 2.0 * base).abs() / base < 1e-12);
+
+        // Inverse square root in diffusivity: a body that spreads heat faster
+        // carries it further before the surface feels it.
+        let fast = ThermalProperties::new(4.0 * p.diffusivity, p.conductivity).unwrap();
+        let spread = flash_temperature_rise(mu, f, v, t, a, l, fast);
+        assert!((spread - 0.5 * base).abs() / base < 1e-12);
+    }
+
+    /// The two models must cross over where `crossover_time` says they do, which
+    /// is what makes that function a usable dispatch rule rather than a number
+    /// that happens to exist.
+    ///
+    /// The steady form is a bulk temperature at the end of the contact, so it
+    /// scales with the contact time; the flash form is a surface temperature
+    /// during it, and falls as the contact lengthens. Equating them therefore
+    /// gives the duration at which neither model is obviously right, which is
+    /// exactly the point of reporting it.
+    #[test]
+    fn the_two_models_agree_at_the_stated_crossover() {
+        let (mu, f, v, _, a) = PAD;
+        let l = pad_length();
+        let p = ThermalProperties::STEEL;
+        let t_star = p.crossover_time();
+        assert!(t_star > 0.0 && t_star.is_finite());
+
+        // At t* the two expressions are equal by construction, for any contact:
+        // the flux and the length cancel out of the comparison entirely.
+        let flash = flash_temperature_rise(mu, f, v, t_star, a, l, p);
+        let steady = steady_temperature_rise(mu, f, v, p.conductivity, a, l);
+        assert!(
+            (flash - steady).abs() / steady < 1e-9,
+            "at t*={t_star}: flash {flash} vs steady {steady}"
+        );
+
+        // The crossover is a material constant, so it must not move when the
+        // contact geometry does.
+        let other = ThermalProperties::new(p.diffusivity, 12.0).unwrap();
+        assert!((other.crossover_time() - t_star).abs() / t_star < 1e-12);
+        let quicker = ThermalProperties::new(4.0 * p.diffusivity, p.conductivity).unwrap();
+        assert!((quicker.crossover_time() / t_star - 0.25).abs() < 1e-12);
+
+        // Shorter than the crossover the flash is the larger answer; longer,
+        // the steady one is. Note the two diverge rather than converge, since
+        // the steady form does not depend on duration at all.
+        assert!(flash_temperature_rise(mu, f, v, 0.01 * t_star, a, l, p) > flash);
+        assert!(flash_temperature_rise(mu, f, v, 100.0 * t_star, a, l, p) < flash);
+    }
+
+    /// Degenerate inputs must be refused the way the rest of the crate does, and
+    /// the zero-diffusivity case must not report an infinity.
+    #[test]
+    fn the_flash_form_handles_degenerate_inputs() {
+        let (mu, f, v, t, a) = PAD;
+        let l = pad_length();
+        let p = ThermalProperties::STEEL;
+        assert_eq!(flash_temperature_rise(mu, f, v, t, 0.0, l, p), 0.0);
+        assert_eq!(flash_temperature_rise(mu, f, v, 0.0, a, l, p), 0.0);
+        assert_eq!(flash_temperature_rise(mu, f, v, t, a, 0.0, p), 0.0);
+        assert_eq!(flash_temperature_rise(0.0, f, v, t, a, l, p), 0.0);
+        assert_eq!(flash_temperature_rise(mu, 0.0, v, t, a, l, p), 0.0);
+
+        // No conduction at all: the steady form reports infinity here, and an
+        // infinite flash temperature is the wrong answer twice over.
+        let insulator = ThermalProperties::new(0.0, 0.5).unwrap();
+        assert_eq!(flash_temperature_rise(mu, f, v, t, a, l, insulator), 0.0);
+        assert_eq!(insulator.crossover_time(), f64::INFINITY);
+
+        // And the constructor rejects what it should.
+        assert!(ThermalProperties::new(1.0e-5, 0.0).is_err());
+        assert!(ThermalProperties::new(-1.0, 50.0).is_err());
+        assert!(ThermalProperties::new(0.0, 50.0).is_ok());
     }
 }

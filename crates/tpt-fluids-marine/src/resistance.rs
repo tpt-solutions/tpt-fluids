@@ -63,22 +63,6 @@ pub fn ittc_57_friction(reynolds: f64) -> f64 {
     0.075 / squared
 }
 
-/// The ITTC-1957 hull-form line, which reports a conventional figure rather
-/// than a usable skin-friction coefficient.
-///
-/// ```text
-/// C_f = 0.00313 L^(1/3) + 0.0035 B^(1/3) + 0.0024 (B/T)^(1/2)
-///       + 0.00021 V / L^(1/2) + 0.0024 Fr
-/// Fr  = V / sqrt(g L)
-/// ```
-///
-/// The value this returns is quoted in the literature as `C_f x 10^3`, and
-/// [`friction_coefficient_x1000`] presents it that way. It is roughly 25
-/// times the magnitude of a true skin-friction coefficient, so it must not be
-/// multiplied straight into `0.5 rho V^2 S C_f`; use [`ittc_57_friction`] for
-/// that. This function is kept because the hull-form line is the right thing
-/// to correlate when comparing hull forms that share a length, and because
-/// the published figures are stated in its terms.
 /// The ITTC-1957 friction coefficient for a ship of the given hull geometry
 /// and speed.
 ///
@@ -90,6 +74,16 @@ pub fn ittc_57_friction(reynolds: f64) -> f64 {
 ///
 /// with `L` the total wetted length, `B` the beam, `T` the draught, all in
 /// metres, and `V` in metres per second.
+///
+/// **This is the hull-form line, and it reports a conventional figure rather
+/// than a usable skin-friction coefficient.** The value is quoted in the
+/// literature as `C_f x 10^3`, and [`friction_coefficient_x1000`] presents it
+/// that way. It comes out roughly 25 times the magnitude of a true
+/// skin-friction coefficient, so it must **not** be multiplied straight into
+/// `R = 0.5 rho V^2 S C_f` -- use [`ittc_57_friction`] for that. It is kept
+/// because the hull-form line is the right thing to correlate when comparing
+/// hull forms of similar length, and because the published figures are stated
+/// in its terms.
 pub fn ittc_1957_friction(length: Length, beam: Length, draught: Length, speed: Velocity) -> f64 {
     let l = length.value();
     let b = beam.value();

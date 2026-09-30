@@ -36,6 +36,82 @@
 - [x] Initial commit
 - [x] Sanity check: `cargo build` succeeds on the empty workspace
 
+## Fixed defects worth remembering
+
+These were all silent: every value stayed finite, positive, and plausible, so
+none of them would ever fail an assertion. Each was found by printing
+intermediate state and reading it, not by trusting that the numbers looked
+reasonable.
+
+- **Colebrook dual gradient** returned a hardcoded `0.02` instead of the exact
+  forward-mode dual. Now an exact dual iteration, with value, gradient,
+  seed-independence and scaling tests.
+- **MOC steady seeding** applied the transient `a Q / (g A)` term as a steady
+  loss. In a steady state `Q_P = Q_0`, so a frictionless pipe has *no* steady
+  head gradient; seeding that term made the network drift on runs that should
+  have been perfectly steady. Found by the fixed-point test.
+- **MOC friction term** was a *difference* of friction force between
+  neighbouring ends, which is identically zero for the uniform flow of a
+  steady network, so the seeded Darcy-Weisbach drop washed out within a few
+  steps and the network settled into looking frictionless. Now the absolute
+  per-reach loss, with interior ends seeded on the linear gradient.
+- **MOC check valve** zeroed the branch's *upstream* end as well as its
+  downstream one, stopping flow across the whole branch in a single step and
+  annihilating the wave still travelling through the reaches behind it. It had
+  no test at all.
+- **MOC column separation** clamped the head to the vapour head but left the
+  flow frozen, leaving an `(H, Q)` pair that satisfied no characteristic; the
+  next step read that violation back in as an arriving wave.
+- **Froude scaling** `resistance_from_coefficient` multiplied by `rho g` when
+  the displacement it was given was *already a weight*, inflating every
+  resistance by about 9807. The one test of it asserted that two code paths
+  *agreed* rather than that either was physical, and the test coefficient had
+  been tuned to compensate, so the error and its compensation cancelled to a
+  plausible-looking number. A consistency test between two paths that share a
+  bug is blind to the bug by construction; it needs a physical anchor.
+
+- **Tribology `contact`** `contact_radius` and `approach` both returned `0.0`
+  for an infinite reduced radius, reporting a loaded flat joint as having no
+  contact patch and no deformation at all. The point-contact formula does not
+  apply there (it is a cylinder problem), so the result is now `NaN` and
+  `flat_approach` is the determinable route. Both branches were untested, and
+  the one test that touched them asserted the wrong answer.
+
+- **Single-reach MOC friction** was applied as a *difference* of friction force,
+  `R Q|Q| - R Q_prev|Q_prev|`, added to the head. That telescopes over a closure
+  to the constant `+ R Q0^2`, so instead of damping the surge it added a fixed
+  offset — a frictional gradual closure came out at 0.5333 m, slightly **above**
+  the frictionless 0.5298 m, which is impossible. Friction is now the definite
+  integral of `Q |Q|` along the closure, giving the closed form
+  `rise = (a/g) Q0 - (2/3) R Q0^{3/2}`, which the solver now reproduces to 2%.
+  The test that should have caught it only asserted `slow < fast`, which any
+  monotone model satisfies.
+- **Property tests now cover the MOC solver**, which is where every silent
+  defect in this crate's history was found. Six properties sweep resistance,
+  lag, closure rate, and step count: friction only ever damps a surge, a steady
+  state does not drift, nothing non-finite escapes, a wave moves one reach per
+  step, a friction lag cannot disturb a steady run, and a check valve never
+  passes reverse flow. Writing them immediately found that the two
+  column-separation tests were forcing separation with an impossible vapour
+  head, so they were never exercising the case they claimed to.
+- **A non-finite vapour head is rejected**; one above the reservoir is not. The
+  second is easy to get backwards: a closure surge legitimately exceeds the
+  reservoir head, and that peak is exactly what cavitation is tested against.
+- **Unit checking in `core`** was decorative: every `Dimension` constant was
+  declared and never verified, because the operators work on bare `f64`. Adding
+  the `const` assertion immediately failed the build on three genuinely wrong
+  relations — `Area / Length = Volume`, `Length * Time = Velocity`, and
+  `Velocity / Time = Length` — all of which the old macro had happily generated
+  as real, type-checking `Div` and `Mul` impls with no physical meaning. The
+  cause was that one macro emitted *both* `Mul` and `Div` from a single triple
+  without checking either. They are now `dimensioned_ops!` (asserts the product)
+  and `dimensioned_quotient!` (asserts the quotient), each emitting only what it
+  proves, so a wrong constant is a compile error. Note that the wrong relations
+  were removed, not just the checks: the four dimensionally correct pairs that
+  the old macro had *also* been generating (`Area * Length`, `Velocity * Time`,
+  `Force * Velocity`, `Pressure * Volume`) were restored rather than lost, and
+  `Velocity / Time` now returns an `Acceleration` instead of a `Length`.
+
 ## Per-Crate Checklist Template
 
 Every phase below repeats this shape. The umbrella crate (`tpt-fluids`) uses
@@ -139,12 +215,40 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       connected-component counting, spanning forest, shortest-path tree, and
       fundamental cycle-basis (loop) extraction
 - [x] Implement Hardy Cross method (loop-based) network solver
-      (`hardy_cross.rs`). Correct for single-source networks including
-      parallel pipe pairs, cross-validated against the GGA. **Does not**
-      converge on networks with several sources *and* several independent
-      loops; the GGA solves the same networks in ~9 iterations, so the
-      networks are well posed and this is a limitation of the method. Two
-      tests are `#[ignore]`d for that reason.
+      (`hardy_cross.rs`). **Now converges on every network tested, including
+      the multi-source, multi-loop case that previously stalled**; both tests
+      that were `#[ignore]`d for that reason are enabled. Three separate
+      defects were behind the stall, and each is recorded below because none
+      of them was the one the note above blamed:
+      - The loop correction *linearised* the loop equation, freezing the loop
+        resistance at its current flows and taking one step. It now **solves**
+        the loop equation with a safeguarded Newton iteration on the exact
+        `dh(dQ) = sum w_i (x_i + dQ)|x_i + dQ|`, which is quadratic in the
+        correction and cheap to evaluate.
+      - The stall test compared the *worst single* loop imbalance between
+        passes. Under Gauss-Seidel correction, closing loop A necessarily
+        disturbs loop B, so a network improving steadily at 0.4 per pass was
+        reported as stalled. It now watches the total imbalance and requires
+        several consecutive non-improving passes (`HardyCrossOptions::
+        consecutive_stalls`) before giving up.
+      - The seed was demand-only and ignored the head field, which on a
+        multi-source network seeds a *second, spurious* solution: every loop
+        balances and continuity holds, so the iteration converged to it and
+        returned `Ok` with flows of order 1e-2 where the answer is order 1.
+        The seed is now built from a head field interpolated between the
+        reservoirs, then the continuity residual is folded back through the
+        forest so both exactness properties hold.
+      A separate, smaller bug fixed along the way: `continuity_error` counted
+      fixed-head reservoirs as continuity failures, so a converged two-reservoir
+      solution reported an "error" equal to the network's own net demand. The
+      GGA always excluded them.
+      **Remaining limitation, which is a different and stronger one:** loop
+      correction cannot choose between the several flow fields that satisfy its
+      own equations, since `h = r Q|Q|` is not injective. On a five-link
+      two-reservoir network Hardy Cross and the GGA now return *different* flow
+      fields, each internally consistent. The GGA is head-based with a
+      positive-definite Jacobian, so the physical branch is the only one it can
+      settle at. Use the GGA when the values matter.
 - [x] Implement Global Gradient Algorithm (node-based Newton-Raphson) network
       solver (`gga.rs`), on `tpt-math-linalg`. Fully general: multi-source,
       looped, and tree networks, with a backtracking line search. Validated by
@@ -159,7 +263,7 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
       closure. The frictionless limit reproduces the Joukowsky rise exactly,
       which is the check that matters. Still to do: a multi-node network with
       wave reflection at boundaries, and the friction-damped rise integral.*
-      - **Multi-node reflection: attempted, not shipped, findings recorded.**
+      - **Multi-node reflection: implemented and verified.**
         The single-reach solver advances one characteristic pair, so a wave has
         no state to send back -- that is the structural reason it cannot
         reflect, and a head array updated in place cannot fix it. A wave is a
@@ -167,11 +271,29 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
         needs two accumulator arrays (`c_minus` upstream, `c_plus` downstream)
         onto which waves are superimposed, and only then can a wave cross the
         pipe, turn round, and add to what is already there.
-        Built and instrumented, and the reflection machinery itself worked: the
-        wave was traced travelling upstream one reach per step, reflecting at the
-        reservoir at full amplitude, and returning downstream. Four real defects
-        were found and fixed along the way, all of which produce plausible
-        numbers rather than errors:
+        `MocNetwork` now does this: every branch is split into reaches and every
+        end is a node solved from **both** arriving characteristics. The
+        formulation rests on one fact that is easy to get backwards -- in a
+        steady state `Q_P = Q_0`, so a frictionless pipe has **no** steady head
+        gradient and the `a Q / (g A)` term is purely the transient Joukowsky
+        rise. Seeding the steady heads with that term was the bug that had been
+        defeating every previous attempt, and it showed up at once in the
+        fixed-point test (`a_steady_network_does_not_move`).
+        `MocNode::DeadEnd` closes the loop: a fixed-head reservoir absorbs a wave
+        completely and so can never display the doubled head a closed end
+        produces. The dead end reflects at full amplitude, verified by a
+        staircase whose steps are exactly twice the one-reach wave amplitude.
+        **History, for whoever reads this next:** the two reverted attempts
+        below are kept as a record of what was wrong, not as open work. Both
+        reached working wave machinery and both were discarded for a *physics*
+        reason, not a bug: the accumulator form had no boundary able to hold
+        pressure, and the node form was not a simultaneous solve at each node.
+        Every defect they found is in the shipped code as a test. The
+        accumulator form also showed the Courant limit must be checked
+        directly, and that the characteristic companion of an interior end is
+        `k - 1`, not `k + 1`.
+        The accumulator attempt found four defects, all of which produce
+        plausible numbers rather than errors:
         1. The steady profile applied `(a/g) Q` *per reach*, putting `8 (a/g) Q`
            across an 8-reach pipe instead of `(a/g) Q` once -- a valve at
            -308 m under a 100 m reservoir. The loss scales with *distance*, so
@@ -195,18 +317,158 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
         reverted; `water_hammer.rs` is unchanged from its last commit. The
         reflection coefficients that would drive the correct form are now
         stated in this file rather than in code that does not exist.
+      - **Multi-node MOC: attempted a second time, also not shipped, and this
+        time for a different reason.** A different formulation was tried --
+        the node-based one, where every pipe is discretised into reaches with
+        `dt = dx / a` and each node is closed by its boundary condition
+        (reservoir: head known; valve: flow known; junction: continuity). This
+        gets much further than the accumulator form: the Joukowsky rise came
+        out **exactly** right (1.000x the closed form), and the Courant
+        commensurability across branches with different lengths and wave speeds
+        works. Six defects were found and fixed, all silent -- plausible finite
+        numbers, never errors:
+        1. The momentum coefficient. `B = a / (g A)` paired with a *volume* flow
+           is the correct head; `a / g` with a volume flow, or `a / (g A)` with a
+           velocity, are each wrong by a factor of the area. Every version of this
+           tried it wrong at least once.
+        2. The steady seed applied `B Q` per reach instead of once per branch,
+           putting a 1000 m gradient on a 150 m pipe. The head field is only
+           consistent if the *interior* ends are seeded from the characteristic
+           itself, one `B Q` apart -- a merely smooth interpolation is not
+           enough, because the propagation then shifts the steady field one
+           reach per step while looking perfectly smooth.
+        3. `end_node` mapped every downstream end to `branch.to`, so every
+           *interior* computational end inherited that node's boundary
+           condition. A valve closure was then applied along the whole pipe at
+           once, which is the exact lumped behaviour the solver exists to
+           remove. Interior ends must report no network node at all.
+        4. The characteristic companion for an interior end was taken as `k + 1`
+           instead of `k - 1`, which convects the head field one reach per step
+           rather than propagating a wave.
+        5. Copying a boundary end's prescribed flow onto every end of the branch
+           teleported the wave; an interior end's flow is a property of its own
+           reach and must not be overwritten.
+        6. The valve's head was computed from the end's already-propagated value
+           and then corrected again, giving exactly `2x` the Joukowsky rise, and
+           later exactly `n / (n - 1)` of it once the interior ends were
+           interpolated. The correction has to be applied to the end's *previous*
+           head, not to the propagated one.
+        **Why this one was also reverted:** the remaining error was a
+        factor-of-`n/(n-1)` on the valve rise, which is a boundary-application
+        detail, but chasing it exposed the real blocker. The node-based form
+        requires each node to be closed by a **simultaneous** solve over all of
+        its ends at once: every end at a junction gives an affine relation
+        between the common head and its flow, and those relations plus the node
+        balance form a small linear system. Closing the ends one at a time --
+        solving for the head, then writing each end's flow back -- is not an
+        approximation of that system, it is a different and inconsistent one,
+        and it is what left the wave appearing one reach early. A correct
+        implementation needs the per-node system assembled and solved
+        together, which is a real piece of work rather than a fix.
+        The diagnosis is the useful output here: **the frictionless Joukowsky
+        rise, the Courant commensurability, and the head-consistent seed are all
+        now understood and were verified numerically before the revert.** What
+        remains is the simultaneous node solve, and the reflection-coefficient
+        boundary of the previous attempt still stands as the alternative route.
+        `water_hammer.rs` is unchanged from its last commit; no half-working
+        multi-node code was left behind.
+- [x] **Multi-node MOC, shipped.** `MocNetwork` in `water_hammer.rs` discretises
+      every branch into reaches with a Courant-common `dt`, and each *end* is a
+      node solved from two arriving characteristics. The formulation, and the
+      four facts that took three attempts to establish:
+      1. **`B = a / (g A n)` per reach**, paired with a *volume* flow. `a / (g A)`
+         alone is the whole-*pipe* loss; using it per reach gives `n` times the
+         gradient, a 4x error on a 4-reach pipe that stays finite and smooth.
+      2. **Both characteristics take the same sign on the flow term** --
+         `a_plus = H_up + B Q` and `a_minus = H_dn - B Q`, so the end satisfies
+         `H = a_plus - B Q` on one side and `H = a_minus + B Q` on the other.
+      3. **An interior end is a node with two unknowns** and needs both
+         equations: `Q = (a_plus - a_minus) / (2B)`, `H = (a_plus + a_minus) / 2`.
+         Treating it as a single propagated value is a one-equation treatment of
+         a two-equation node and makes the wave appear a reach early on every
+         step.
+      4. **The Courant limit must be checked directly**, not only through
+         `ceil(L / (a dt)) >= 1`, since `ceil` of a small number is still 1 and
+         a `dt` a hundred times over the limit would be rounded away silently.
+      **The bug that had defeated two earlier attempts**, and which the
+      "a steady network does not move" test found immediately: a *frictionless*
+      pipe has **no steady head gradient at all**. In a steady state `Q_P = Q_0`,
+      so the flow term in the linearised momentum equation vanishes, and the
+      `a Q / (g A)` term is purely *transient* -- it is the Joukowsky rise and
+      appears only when the flow changes. Seeding it as a steady loss puts a
+      non-physical gradient into the initial state, which is then inconsistent
+      with the characteristics and makes the whole network drift on a run that
+      should be perfectly steady. The steady drop comes from **friction alone**,
+      lumped at the nodes, which is also why the interior ends are flat.
+      Two test-data traps worth keeping: the pre-existing single-reach tests use
+      `Q = 0.5` in a `0.0707 m^2` pipe, which is 7 m/s and passes only because
+      those tests treat `Q` as a *velocity*; and a **fixed-head reservoir cannot
+      show a Joukowsky head rise at all** -- the arriving wave is absorbed by the
+      flow changing, so the far end's observable is "the flow stops", not "the
+      head rises". Asserting a head rise at a reservoir tests something its
+      boundary condition forbids.
+      Tests: 33 in the module, including the steady fixed point, one-reach-per-
+      step propagation, friction-only steady gradient, per-reach valve
+      amplitude, the flow stopping only after the wave arrives, the
+      reconstructed Joukowsky head `n x` the one-reach rise, the dead-end
+      full-amplitude reflection, a moving reservoir launching a travelling
+      wave, the unsteady-friction steady limit and damping, and a check valve
+      whose closure travels as a wave rather than being lumped.
+      **Second bug found and fixed in the same area.** The check-valve block
+      zeroed the branch's *upstream* end as well as its downstream one, so a
+      check valve stopped flow across the whole branch in a single step and
+      annihilated the wave still travelling through the reaches behind it --
+      another lumped shortcut, and the reason it survived is that **it had no
+      test at all**. Clamping the valve end alone makes the closure propagate as
+      a real front, one reach per step, which
+      `a_check_valve_stops_at_its_own_end_and_the_stop_travels` now pins.
+      **Third bug found and fixed in the same area.** Column separation clamped
+      the head to the vapour head but left the flow frozen at its
+      pre-separation value, leaving a `(H, Q)` pair that satisfied no
+      characteristic; the next step read it back as an arriving wave, so the
+      violation was injected rather than absorbed. The trace was the giveaway --
+      head jumping to 1e6 with the flow sitting at 0.0035. Separation now also
+      releases the flow to the free discharge that head implies, and
+      `column_separation_releases_the_flow_rather_than_freezing_it` pins the
+      exact value.
+      **Still open:** nothing in the MOC formulation itself. Unsteady friction is
+      per-branch via `with_derived_friction_lag`, which derives `T_f =
+      L / (g A R |Q|)` from each pipe's own properties, and the friction rise
+      integral is now reproduced against its closed form.
+      **Bug found and fixed while doing the above.** The friction force entered
+      each characteristic as a *difference* between neighbouring ends,
+      `r (Q_k E_k - Q_{k-1} E_{k-1})`, which is identically zero for the uniform
+      flow of a steady network. Nothing held the gradient up, so the seeded
+      Darcy-Weisbach drop washed out within a few steps and the network settled
+      back to frictionless -- the exact opposite of the documented "the steady
+      drop comes from friction alone". It failed silently: every value stayed
+      finite and plausible. The friction is now the absolute per-reach loss
+      `r Q E`, each interior end is seeded on the linear gradient between its
+      node heads, and `a_frictional_steady_state_is_an_exact_fixed_point` pins
+      it to 1e-12 over 40 steps.
 - [x] Implement component models: valve `Cv` and `K` coefficients, pump
       characteristic curves (quadratic three-point fit, shut-off head, runout
       flow, hydraulic power), cavitation state from the cavitation number, and
       surge tank dynamics. Tabulated minor-loss coefficients for entrances,
-      elbows, and exits are included. The turbine four-quadrant curve is not
-      modelled beyond its loss coefficient.
+      elbows, and exits are included. **The turbine four-quadrant curve is
+      implemented** (`TurbineCurve`), not just its loss coefficient: generating,
+      windmilling and pumping quadrants via `quadrant()`, with `runout_flow`
+      and the extracted hydraulic power. This entry was stale -- it described
+      the crate as it was before the four-quadrant work.
 - [x] Implement differentiable head-loss functions (via `tpt-math-autodiff`)
       for downstream pipe-sizing optimization. `differentiable.rs` evaluates
       Darcy-Weisbach over forward-mode dual numbers, so the diameter
       sensitivity comes out exactly in one pass. Supports the laminar,
-      Swamee-Jain, and Hazen-Williams correlations analytically; a
-      finite-difference fallback covers the implicit Colebrook-White.
+      Swamee-Jain, and Hazen-Williams correlations analytically. **Colebrook-White
+      no longer needs a finite-difference fallback**: its iteration is now run
+      over duals, so the gradient is exact. Differentiating the *iteration*
+      rather than the implicit equation sidesteps the real hazard here, namely
+      that Colebrook depends on the diameter through two routes (`eps/D` and
+      `Re`) and hand-derivation drops one of them, which silently flips the
+      sign of the friction-factor contribution. Two tests pin this: one checks
+      the dual gradient against a centred difference to 1e-7, the other checks
+      it is *linear* in `dRe/dD` and passes through the origin, which a
+      difference quotient cannot do exactly.
 
 - [x] Unit tests for the modules delivered so far — 12 friction tests,
       including a *residual* test that checks the Colebrook-White output
@@ -235,11 +497,14 @@ Depends on: `tpt-fluids-core`, `tpt-math-graph` (topology), `tpt-math-linalg`
 
 Complete except for the items marked in progress. The crate carries
 `error`, `friction`, `network`, `hardy_cross`, `gga`, `water_hammer`,
-`components`, and `differentiable`. 73 unit tests and 1 doctest pass, with 2
-`#[ignore]`d for the documented Hardy Cross non-convergence on multi-source,
-multi-loop networks. The GGA is the general solver and is validated against an
-independently derived reference; reach for it unless a small single-source
-network is all that is needed.
+`components`, and `differentiable`. **119 unit tests pass with none
+`#[ignore]`d** -- the two that were withheld for the documented Hardy Cross
+non-convergence are now enabled, and that non-convergence is fixed. The GGA
+remains the general solver and is validated against an independently derived
+reference. Reach for it whenever the flow *values* matter, not merely when the
+network is small: Hardy Cross now closes every loop on these networks but
+cannot select between the several flow fields its own equations admit, whereas
+the GGA's head-based formulation can. See the Hardy Cross entry above.
 
 ## Phase 3 — tpt-fluids-marine
 
@@ -344,10 +609,19 @@ vehicles. Depends on: `tpt-fluids-core`, `tpt-math-linalg`/
       eccentricity-load solution
 - [x] Archard's linear wear law and the wear coefficient, plus the
       inversion, wear depth, life-for-depth, the lambda ratio and its
-      separation-regime classification, and frictional heating with an
-      explicit validity check on the quasi-steady temperature rise. A
-      brake pad computes to 20 000 K, and a test asserts exactly that so
-      the limit of the steady form stays concrete rather than aspirational
+      separation-regime classification, and frictional heating. **The
+      transient flash temperature is now solved** (Blok-Wilde, `2qL /
+      (k sqrt(pi alpha t_c))`) alongside the quasi-steady form, with
+      `ThermalProperties` and a `crossover_time` that says which applies.
+      Doing so exposed a **dimensional bug in the pre-existing steady form**:
+      `mu F v / (k A)` is kelvin per *metre*, because conduction `q L / k`
+      needs a length. The "20 000 K brake pad" that the old test pinned as a
+      documented limit was that expression read as a temperature; the same
+      duty with `L = sqrt(A/pi)` is about 1 600 K, a real disc temperature.
+      Both forms now take the length explicitly, and the test asserts the
+      corrected value. The crossover is ~30 hours for steel, which is the
+      quantitative statement of why the transient form is the right default
+      and the steady one is not a close approximation to it.
 
 - [x] `cargo fmt` / `clippy` clean
 - [x] Add to root `Cargo.toml` members + workspace deps
@@ -424,10 +698,24 @@ message.
       previous text had UTF-8 mojibake from the bootstrap and claimed EHL,
       Dowson-Hampton and LuGre friction, none of which exist.
 - [x] `cfg(kani)` declared in the workspace lint config
-- [ ] Advanced coupling follow-up: EHL coupling between `tpt-fluids-tribo`
-      and `tpt-fem-elasticity`. **Not externally blocked after all** -- see the
-      correction in the spec audit below: `c:\Programming\tpt-fem` contains a
-      local `tpt-fem-elasticity` crate. The remaining obstacle is a policy one
+- [x] EHL **film thickness** implemented in `tpt-fluids-tribo::ehl`:
+      Dowson-Higginson (line contact) and Hamrock-Dowson (point contact), the
+      minimum-film factor `H_min = 0.8 H_c` for the side-lobed point contact, and
+      the lambda ratio with its separation-state thresholds. These are closed-form
+      correlations and need no elastic solver, so the film thickness — the
+      quantity every lubricant-selection decision turns on — is now available.
+      Two notes from doing it. First, a heavily loaded gear mesh gives a film
+      around **1 nm**, which against ground flanks is a lambda near 0.02 and
+      therefore genuine *boundary* lubrication; quoting "EHL" for such a contact
+      without checking the ratio is the mistake the module exists to prevent.
+      Second, the correlations are only meaningful inside their validity range,
+      and a nearly stationary contact will happily return a sub-atomic film
+      that is arithmetically correct and physically meaningless.
+- [ ] Advanced coupling follow-up: the **coupled** EHL solution — pressure
+      distribution and sub-surface stress from solving Reynolds together with the
+      elastic deformation of both bodies. **Not externally blocked after all** --
+      see the correction in the spec audit below: `c:\Programming\tpt-fem` contains
+      a local `tpt-fem-elasticity` crate. The remaining obstacle is a policy one
       (unpublished, path-resolved, and `deny.toml` requires a registry source),
       not an absent dependency.
 - [x] **End-to-end pipe-network diameter optimization** via
@@ -670,7 +958,7 @@ assumed.
       `0.5`, so the comparison must be `<=`, not `<`. Both are pinned now. A
       Kani harness would have reported them as counterexamples; without the
       mirrors, nothing here would have been evidence of anything.
-- [ ] **`tpt-systems-optimisation`** (lines 156, 176) - **exists, and the
+- [x] **`tpt-systems-optimisation`** (lines 156, 176) - **exists, and the
       license clears; the blocker is publication, not absence.**
       The earlier note here said "not present as a sibling repo", which was true
       of the local filesystem and wrong about the world: it is public at

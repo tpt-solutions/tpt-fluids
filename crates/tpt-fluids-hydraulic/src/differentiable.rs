@@ -31,6 +31,26 @@
 //! // loses less head, which is what drives a sizing optimiser to upsize.
 //! assert!(h.du(0) < 0.0);
 //! ```
+//!
+//! # Every correlation gets an exact gradient, Colebrook-White included
+//!
+//! The explicit correlations are evaluated in closed form over duals, so their
+//! derivatives come from the algebra directly. Colebrook-White is implicit in
+//! `f` and cannot be, and that used to be the one place in the crate that fell
+//! back to a finite difference.
+//!
+//! It no longer does. The Colebrook *iteration itself* is run over duals. The
+//! value iteration is a contraction `f -> F(f, Re)`, so its derivative
+//! `f' -> F_f f' + F_Re` is a contraction too, and both converge to the
+//! derivative of the same fixed point. The gradient therefore arrives exactly,
+//! by the chain rule, without anyone differentiating the implicit equation by
+//! hand -- which matters, because that equation depends on the diameter through
+//! *two* routes (the `eps/D` term and `Re`) and dropping either one silently
+//! changes the sign of the friction-factor contribution.
+//!
+//! [`head_loss_gradient`] is retained as a general escape hatch that works for
+//! any correlation at the cost of extra evaluations, but it is no longer the
+//! path any of them needs.
 
 use tpt_math_autodiff::fwd::Dual;
 
@@ -129,16 +149,21 @@ pub fn head_loss_with(
         Scalar::constant(0.0)
     };
 
-    let f = friction_factor_dual(re_d, d, model);
+    let f = friction_factor_dual(re_d, model);
     // h = f (L/D) V^2 / 2g
     let v_sq = velocity.value() * velocity.value();
     f * (Scalar::constant(length.value()) / d)
         * Scalar::constant(v_sq / (2.0 * tpt_fluids_core::consts::STANDARD_GRAVITY))
 }
 
-/// The friction factor evaluated over dual numbers, with a roughness that is
-/// itself a function of the diameter.
-fn friction_factor_dual(re: Scalar, diameter: Scalar, model: FrictionModel) -> Scalar {
+/// The friction factor evaluated over dual numbers.
+///
+/// The Reynolds number arrives already carrying `dRe/dD`; each correlation then
+/// propagates it through its own algebra. The diameter is *not* a separate
+/// argument, because no correlation needs it directly: every one reaches the
+/// diameter through `Re`, and passing the diameter as well would invite a
+/// correlation to use the wrong one of the two paths.
+fn friction_factor_dual(re: Scalar, model: FrictionModel) -> Scalar {
     match model {
         // Laminar: f = 64/Re exactly.
         FrictionModel::Laminar => {
@@ -170,16 +195,115 @@ fn friction_factor_dual(re: Scalar, diameter: Scalar, model: FrictionModel) -> S
             }
             Scalar::constant(0.082 * c * c) / powf(re, 0.2)
         }
-        // Colebrook-White is implicit; `differentiable::friction_factor`
-        // solves it on the value and re-attaches the sensitivity numerically
-        // via a centred difference in the diameter. That is the one place a
-        // finite difference is genuinely needed, since the equation is
-        // transcendental in f.
-        FrictionModel::ColebrookWhite => {
-            let _ = diameter;
-            Scalar::constant(0.02)
-        }
+        // Colebrook-White is implicit in `f`, but the *gradient* is still exact.
+        // Rather than differentiating the implicit equation by hand, the same
+        // fixed-point iteration the value path uses is run over dual numbers.
+        // Differentiating a contraction about its fixed point converges to the
+        // derivative of that fixed point, so the seeded derivative slot washes
+        // out of the answer entirely: whatever seed this starts from, the
+        // converged `df/dD` is the exact implicit derivative. This is the
+        // analytic gradient, and unlike a finite difference it is exact to
+        // machine precision rather than to the step size.
+        FrictionModel::ColebrookWhite => colebrook_white_dual(re),
     }
+}
+
+/// The Colebrook-White friction factor over dual numbers, carrying `d f / d D`.
+///
+/// # Why iterating the dual is the same as differentiating the implicit form
+///
+/// Colebrook-White does not isolate `f` in closed form, so the naive way to get
+/// `df/dD` is to write `F(f, D) = 0` and apply the implicit function theorem.
+/// That works, but it has to be done by hand and it is easy to drop a term: `Re`
+/// is itself a function of `D`, so `F` has *two* dependencies to carry, and
+/// forgetting the `dRe/dD` one silently changes the sign of the friction-factor
+/// contribution to the gradient.
+///
+/// Iterating the dual instead sidesteps that entirely. The value iteration is
+/// a contraction `f -> F(f, D)`, so its derivative `f' -> F_f f' + F_D` is a
+/// contraction too, and both converge to the derivative of the same fixed
+/// point. The derivative slot therefore arrives at the right answer on its own,
+/// and the seed below is irrelevant to the converged result -- which is a
+/// stronger statement than "the finite difference was close enough".
+///
+/// The equation solved is the smooth-pipe form the rest of this module uses,
+/// `eps / D = 0`, matching [`head_loss_value`] so the two paths agree on value.
+fn colebrook_white_dual(reynolds: Scalar) -> Scalar {
+    // The internal derivative slot is seeded with zero, which is deliberate: it
+    // proves the iteration's own seed does not affect the converged answer.
+    colebrook_white_dual_seeded(reynolds, 0.0)
+}
+
+/// [`colebrook_white_dual`] with the iteration's internal derivative seed
+/// exposed, so a test can show the seed washes out of the result.
+///
+/// The seed is the derivative of the *starting guess for `f`*, which is an
+/// artefact of the iteration and carries no physics. It is not the same thing
+/// as `dRe/dD`, which the caller supplies and which legitimately scales the
+/// result: `f` is a function of `Re`, so `df/dD = (df/dRe)(dRe/dD)` exactly.
+fn colebrook_white_dual_seeded(reynolds: Scalar, f_seed_derivative: f64) -> Scalar {
+    let re = reynolds.re();
+    if re <= 0.0 {
+        return Scalar::constant(0.0);
+    }
+
+    // The value path clamps Re at 1e12, so the dual path clamps identically --
+    // and scales the derivative by the same factor, because above the ceiling
+    // Re is a constant multiple of itself and that multiple carries through.
+    let ceiling = 1.0e12;
+    let re_clamped = re.min(ceiling);
+    let re_dual = if re > ceiling {
+        let scale = re_clamped / re;
+        Scalar::new(re_clamped, [scale * reynolds.du(0)])
+    } else {
+        reynolds
+    };
+
+    // Seeded from the hydraulically smooth branch, matching the value path.
+    let mut f = Scalar::new(0.3164 / re_clamped.powf(0.25), [f_seed_derivative]);
+
+    const MAX_ITER: usize = 200;
+    const TOL: f64 = 1.0e-10;
+    for _ in 0..MAX_ITER {
+        let sqrt_f = powf(f, 0.5);
+        if !sqrt_f.re().is_finite() || sqrt_f.re() <= 0.0 {
+            break;
+        }
+        // eps/D = 0, so the roughness term drops out of the log's argument.
+        let arg = Scalar::constant(2.51) / (re_dual * sqrt_f);
+        if arg.re() <= 0.0 {
+            break;
+        }
+        // `Dual` has no `Neg` impl, so the negation is built from the constant
+        // identity `-x = 0 - x`, which the subtraction operator provides.
+        let denom = Scalar::constant(0.0) - Scalar::constant(2.0) * log10(arg);
+        let new_f = Scalar::constant(1.0) / (denom * denom);
+        if !new_f.re().is_finite() || new_f.re() <= 0.0 {
+            break;
+        }
+
+        // Convergence has to be judged on the *derivative* as well as the
+        // value, and this is not a refinement. The value contracts quickly and
+        // hits its tolerance in a handful of iterations, while the derivative
+        // contracts with the same factor but from whatever the caller seeded
+        // it with. Stopping on the value alone therefore returns a derivative
+        // that still carries a fraction of the seed, and how much depends on
+        // the seed -- which would make the "analytic" gradient quietly
+        // seed-dependent, the exact defect the dual iteration exists to avoid.
+        //
+        // Both slots are required to be stationary before returning. The
+        // derivative's own test is relative to its magnitude, with an absolute
+        // floor so that a genuinely-zero gradient (a hydraulically fixed `Re`)
+        // converges instead of chasing a relative tolerance on nothing.
+        let value_settled = (new_f.re() - f.re()).abs() <= TOL * f.re();
+        let derivative_settled =
+            (new_f.du(0) - f.du(0)).abs() <= TOL * new_f.du(0).abs().max(f64::MIN_POSITIVE);
+        if value_settled && derivative_settled {
+            return new_f;
+        }
+        f = new_f;
+    }
+    f
 }
 
 /// The base-10 logarithm of a dual number.
@@ -212,13 +336,14 @@ fn powf(x: Scalar, p: f64) -> Scalar {
     Scalar::new(value, d)
 }
 
-/// The head loss gradient with respect to diameter, evaluated by a centred
-/// difference on the closed-form head loss.
+/// The head loss gradient with respect to diameter, by centred difference.
 ///
-/// This is the general escape hatch: it works for *any* correlation, including
-/// the implicit Colebrook-White, at the cost of two extra evaluations. It is
-/// here so a caller never has to fall back to a private helper, and the test
-/// below checks it against the analytic gradient where one exists.
+/// This is a verification and escape-hatch path, not the main one. Every
+/// correlation -- Colebrook-White included -- now has an exact gradient through
+/// the dual-number entry points, so nothing here needs it. It is kept because it
+/// costs two extra evaluations and works for *any* correlation without special
+/// handling, and because comparing it against the analytic gradient is how the
+/// tests below check that the analytic one is right.
 pub fn head_loss_gradient(
     length: Length,
     velocity: Velocity,
@@ -465,5 +590,166 @@ mod tests {
             let via_dual = log10(Scalar::constant(x)).re();
             assert!((via_dual - x.log10()).abs() < 1e-12, "x={x}");
         }
+    }
+
+    /// The Colebrook dual path must agree with the *iterated* value, not with a
+    /// hardcoded placeholder.
+    ///
+    /// This is the regression test for the defect that made the default
+    /// `head_loss` entry point wrong: the Colebrook arm used to return a
+    /// constant 0.02, so the module's own default correlation silently returned
+    /// a friction factor that is a plausible-looking guess rather than a
+    /// solution. Pinning it against the plain solver means the two paths cannot
+    /// drift apart again.
+    #[test]
+    fn colebrook_dual_value_matches_the_iterated_solution() {
+        let (mu, nu) = params();
+        let v = Velocity::new(2.0);
+        for d in [0.05f64, 0.15, 0.30, 0.60, 1.0] {
+            let h = head_loss_dual(
+                Length::new(200.0),
+                v,
+                Scalar::variable(d, 0),
+                mu,
+                nu,
+                FrictionModel::ColebrookWhite,
+            );
+            let reference = head_loss_value(
+                Length::new(200.0),
+                v,
+                d,
+                mu,
+                nu,
+                FrictionModel::ColebrookWhite,
+            );
+            assert!(
+                (h.re() - reference).abs() / reference < 1e-9,
+                "D={d}: dual {} vs iterated {reference}",
+                h.re()
+            );
+        }
+    }
+
+    /// The whole claim of the dual Colebrook path: the gradient is *exact*, not
+    /// approximated. A centred difference converges to the derivative as
+    /// `O(h^2)`, so agreeing with it to 1e-7 relative at a well-chosen step is
+    /// only possible if the analytic value is right.
+    ///
+    /// The previous implementation returned a constant 0.02 and therefore a
+    /// gradient of exactly zero, which is why this test is worded against a
+    /// signed comparison rather than a magnitude one.
+    #[test]
+    fn colebrook_gradient_is_exact_and_non_zero() {
+        let (mu, nu) = params();
+        let v = Velocity::new(2.0);
+        for d in [0.08f64, 0.20, 0.35, 0.50] {
+            let h = head_loss_dual(
+                Length::new(150.0),
+                v,
+                Scalar::variable(d, 0),
+                mu,
+                nu,
+                FrictionModel::ColebrookWhite,
+            );
+            let numeric = head_loss_gradient(
+                Length::new(150.0),
+                v,
+                d,
+                mu,
+                nu,
+                FrictionModel::ColebrookWhite,
+                1.0e-6,
+            );
+            assert!(h.du(0).abs() > 0.0, "D={d}: the gradient must not vanish");
+            assert!(
+                (h.du(0) - numeric).abs() / numeric.abs() < 1e-7,
+                "D={d}: analytic {} vs numeric {numeric}",
+                h.du(0)
+            );
+            // And the sign is the one that drives a sizing optimiser: wider
+            // means less loss.
+            assert!(
+                h.du(0) < 0.0,
+                "D={d}: gradient {} should be negative",
+                h.du(0)
+            );
+        }
+    }
+
+    /// The iteration's own derivative seed must not affect the converged answer.
+    ///
+    /// The seed is the derivative of the *starting guess* for `f`, an artefact of
+    /// the iteration with no physics in it. The dual argument arrives at the
+    /// gradient through the chain rule, so the correct statement is the strong
+    /// one: the seed washes out entirely, rather than merely becoming small.
+    ///
+    /// This is the property that distinguishes the analytic gradient from a
+    /// propagated finite difference, and it is what the old constant-0.02 arm
+    /// could never have satisfied.
+    #[test]
+    fn the_colebrook_gradient_does_not_depend_on_the_iteration_seed() {
+        let (_mu, nu) = params();
+        let v = Velocity::new(2.0);
+        let d = 0.30;
+        let re = Reynolds::from_kinematic(v, Length::new(d), nu).value();
+        let re_dual = Scalar::new(re, [re / d]);
+
+        let zero_seeded = colebrook_white_dual_seeded(re_dual, 0.0);
+        // Seeds orders of magnitude away from the answer, in both directions.
+        for seed in [-50.0, -1.0, 1.0, 500.0] {
+            let other = colebrook_white_dual_seeded(re_dual, seed);
+            assert!(
+                (other.re() - zero_seeded.re()).abs() / zero_seeded.re() < 1e-12,
+                "seed {seed}: value {} vs {}",
+                other.re(),
+                zero_seeded.re()
+            );
+            assert!(
+                (other.du(0) - zero_seeded.du(0)).abs() / zero_seeded.du(0).abs() < 1e-10,
+                "seed {seed}: gradient {} vs {}",
+                other.du(0),
+                zero_seeded.du(0)
+            );
+        }
+    }
+
+    /// `f` depends on the diameter only through `Re`, so the gradient must be
+    /// *linear* in `dRe/dD` and pass exactly through the origin.
+    ///
+    /// This is the chain rule stated as a test, and it is the check that
+    /// distinguishes a genuine partial derivative from a finite-difference
+    /// estimate: a difference quotient is only approximately linear and has a
+    /// step-size-dependent offset, whereas `df/dD = (df/dRe)(dRe/dD)` holds to
+    /// machine precision for any multiple, including zero.
+    #[test]
+    fn the_colebrook_gradient_is_linear_in_the_reynolds_derivative() {
+        let (_mu, nu) = params();
+        let v = Velocity::new(2.0);
+        let d = 0.30;
+        let re = Reynolds::from_kinematic(v, Length::new(d), nu).value();
+        let base = colebrook_white_dual(Scalar::new(re, [re / d])).du(0);
+
+        for multiple in [0.0, 0.5, 2.0, -1.0, 10.0] {
+            let scaled = colebrook_white_dual(Scalar::new(re, [multiple * re / d])).du(0);
+            let expected = multiple * base;
+            let tolerance = expected.abs().max(base.abs()) * 1.0e-10;
+            assert!(
+                (scaled - expected).abs() <= tolerance,
+                "multiple {multiple}: gradient {scaled} vs {expected}"
+            );
+        }
+    }
+
+    /// A non-positive or zero Reynolds number must be handled on every path
+    /// rather than producing a NaN that would poison a downstream optimiser.
+    #[test]
+    fn degenerate_reynolds_numbers_give_zero_not_nan() {
+        let direct = colebrook_white_dual(Scalar::constant(0.0));
+        assert_eq!(direct.re(), 0.0);
+        assert!(direct.re().is_finite());
+
+        let negative = colebrook_white_dual(Scalar::new(-1.0, [1.0]));
+        assert_eq!(negative.re(), 0.0);
+        assert!(negative.du(0).is_finite());
     }
 }
