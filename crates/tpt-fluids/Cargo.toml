@@ -10,13 +10,14 @@ readme = "README.md"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/tpt-fluids"
-keywords = ["fluids", "hydraulics", "marine", "tribology", "umbrella"]
+keywords = ["fluids", "hydraulics", "marine", "tribology", "carbonation", "umbrella"]
 categories = ["science", "mathematics"]
 
 [dependencies]
 tpt-fluids-core = { workspace = true, optional = true }
 tpt-fluids-hydraulic = { workspace = true, optional = true }
 tpt-fluids-marine = { workspace = true, optional = true }
+tpt-fluids-multiphase-bev = { workspace = true, optional = true }
 tpt-fluids-tribo = { workspace = true, optional = true }
 tpt-fluids-verify = { workspace = true, optional = true }
 
@@ -26,6 +27,7 @@ core = ["dep:tpt-fluids-core"]
 hydraulic = ["core", "dep:tpt-fluids-hydraulic"]
 marine = ["core", "dep:tpt-fluids-marine"]
 tribo = ["core", "dep:tpt-fluids-tribo"]
+multiphase-bev = ["core", "dep:tpt-fluids-multiphase-bev"]
 verify = ["hydraulic", "marine", "tribo", "dep:tpt-fluids-verify"]
 # `?` so this only reaches a sub-crate whose optional dependency is actually
 # enabled, which is what lets `tpt-fluids --no-default-features --features
@@ -34,6 +36,7 @@ std = [
     "tpt-fluids-core?/std",
     "tpt-fluids-hydraulic?/std",
     "tpt-fluids-marine?/std",
+    "tpt-fluids-multiphase-bev?/std",
     "tpt-fluids-tribo?/std",
 ]
 

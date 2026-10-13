@@ -73,6 +73,9 @@ pub use tpt_fluids_marine;
 #[cfg(feature = "tribo")]
 pub use tpt_fluids_tribo;
 
+#[cfg(feature = "multiphase-bev")]
+pub use tpt_fluids_multiphase_bev;
+
 #[cfg(feature = "verify")]
 pub use tpt_fluids_verify;
 

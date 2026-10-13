@@ -1101,3 +1101,27 @@ fluid density or viscosity data. Phase 1 therefore implements the property
 database in-house inside `tpt-fluids-core` (`FluidProperties`, `DensityModel`,
 `water_viscosity`, `water_vapour_pressure`). No external dependency was added,
 so `deny.toml`'s registry-only source policy is unaffected.
+
+## Phase 8 - `tpt-fluids-multiphase-bev` (beverage gas-liquid physics)
+
+Screening model for carbonated drinks: CO2 solubility and salting-out, buffer
+speciation, heterogeneous nucleation, and foam-over versus flat. Formulation
+inputs (xylitol Sechenov constant, contact angles, cavity distributions, foam
+thresholds) are placeholders and are tagged as such where they appear.
+
+- [x] `consts`: CODATA molar gas constant and related values (the core
+      `UNIVERSAL_GAS_CONSTANT` is the specific gas constant of air and is not used)
+- [x] `henry`: Weiss CO2 solubility, fugacity, volume conversions
+- [x] `salting_out`: Sechenov ion and neutral coefficients, `Formulation`,
+      solution surface tension
+- [x] `carbonate`: K1/K2/Kw, buffer speciation, bicarbonate release rate
+- [x] `supersaturation`: equilibrium pressure, driving overpressure, critical radius
+- [x] `nucleation`: heterogeneous CNT, log-normal pre-existing gas pockets
+- [x] `mass_transfer`: Stokes-Einstein diffusivity, Frossling, penetration, growth
+- [x] `kinetics`: RK4 release of dissolved CO2 with convergence tests
+- [x] `foaming`: flat / stable / foam-over verdict with margins
+- [x] Umbrella feature `multiphase-bev` (not in default)
+- [x] Proptest invariants in `tpt-fluids-verify`
+- [ ] Calibrate xylitol Sechenov constant and cavity distributions against bench data
+- [ ] Replace placeholder foam thresholds with measured foam-over and shelf-life limits
+- [ ] Correct `tpt-fluids-core::consts::UNIVERSAL_GAS_CONSTANT` (specific gas constant of air, mislabelled as molar)

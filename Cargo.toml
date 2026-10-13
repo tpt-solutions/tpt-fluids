@@ -4,6 +4,7 @@ members = [
     "crates/tpt-fluids-core",
     "crates/tpt-fluids-hydraulic",
     "crates/tpt-fluids-marine",
+    "crates/tpt-fluids-multiphase-bev",
     "crates/tpt-fluids-tribo",
     "crates/tpt-fluids-verify",
     "crates/tpt-fluids",
@@ -24,6 +25,7 @@ repository = "https://github.com/tpt-solutions/tpt-fluids"
 tpt-fluids-core = { version = "0.1.0", path = "crates/tpt-fluids-core", default-features = false }
 tpt-fluids-hydraulic = { version = "0.1.0", path = "crates/tpt-fluids-hydraulic", default-features = false }
 tpt-fluids-marine = { version = "0.1.0", path = "crates/tpt-fluids-marine", default-features = false }
+tpt-fluids-multiphase-bev = { version = "0.1.0", path = "crates/tpt-fluids-multiphase-bev", default-features = false }
 tpt-fluids-tribo = { version = "0.1.0", path = "crates/tpt-fluids-tribo", default-features = false }
 tpt-fluids-verify = { version = "0.1.0", path = "crates/tpt-fluids-verify", default-features = false }
 

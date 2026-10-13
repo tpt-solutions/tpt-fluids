@@ -18,6 +18,7 @@ tpt-fluids-core = { workspace = true, features = ["std"] }
 tpt-fluids-hydraulic = { workspace = true, features = ["std"] }
 tpt-fluids-marine = { workspace = true, features = ["std"] }
 tpt-fluids-tribo = { workspace = true, features = ["std"] }
+tpt-fluids-multiphase-bev = { workspace = true, features = ["std"] }
 proptest = { workspace = true }
 
 [features]

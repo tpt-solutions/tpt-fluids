@@ -751,4 +751,59 @@ proptest! {
             "roughness must not raise the ratio"
         );
     }
+
+    /// Salting out can only lower CO2 solubility: adding any solute never
+    /// raises it, and the ratio stays in (0, 1].
+    #[test]
+    fn salting_out_never_raises_solubility(
+        molar in 0.0f64..3.0,
+        t in 273.15f64..313.15,
+    ) {
+        use tpt_fluids_multiphase_bev::salting_out::{Formulation, Solute};
+        let base = Formulation::water();
+        let salted = Formulation::water()
+            .with(Solute::calcium(), molar)
+            .expect("non-negative")
+            .with(Solute::xylitol_estimate(), molar)
+            .expect("non-negative");
+        let r = salted.solubility_ratio(t);
+        prop_assert!(r.is_finite() && r > 0.0 && r <= 1.0 + 1e-12, "ratio {r}");
+        prop_assert!(r <= base.solubility_ratio(t) + 1e-12);
+    }
+
+    /// The critical bubble barrier is positive and falls as the driving
+    /// overpressure rises, and the heterogeneous factor is never above one.
+    #[test]
+    fn nucleation_barrier_falls_with_overpressure(
+        dp1 in 1.0e3f64..5.0e5,
+        dp2 in 1.0e3f64..5.0e5,
+        cos in -1.0f64..1.0,
+    ) {
+        use tpt_fluids_multiphase_bev::nucleation::{heterogeneous_factor, homogeneous_barrier};
+        let (lo, hi) = if dp1 <= dp2 { (dp1, dp2) } else { (dp2, dp1) };
+        let sigma = 0.072;
+        let w_lo = homogeneous_barrier(sigma, lo);
+        let w_hi = homogeneous_barrier(sigma, hi);
+        prop_assert!(w_lo > 0.0 && w_hi > 0.0);
+        prop_assert!(w_hi <= w_lo);
+        let f = heterogeneous_factor(cos);
+        prop_assert!((0.0..=1.0 + 1e-12).contains(&f), "factor {f}");
+    }
+
+    /// The lognormal survival fraction is a probability and never rises with
+    /// the critical radius: a larger embryo needs a larger pocket.
+    #[test]
+    fn active_cavity_fraction_is_a_falling_probability(
+        r1 in 1.0e-8f64..1.0e-3,
+        r2 in 1.0e-8f64..1.0e-3,
+        median in 1.0e-7f64..1.0e-5,
+        spread in 0.1f64..1.5,
+    ) {
+        use tpt_fluids_multiphase_bev::nucleation::lognormal_survival;
+        let (lo, hi) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
+        let a = lognormal_survival(lo, median, spread);
+        let b = lognormal_survival(hi, median, spread);
+        prop_assert!((0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b));
+        prop_assert!(b <= a + 1e-12, "survival rose: {a} -> {b}");
+    }
 }
